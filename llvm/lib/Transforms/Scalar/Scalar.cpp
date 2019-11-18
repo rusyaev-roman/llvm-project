@@ -43,6 +43,7 @@ void llvm::initializeScalarOpts(PassRegistry &Registry) {
   initializeDCELegacyPassPass(Registry);
   initializeDeadInstEliminationPass(Registry);
   initializeDivRemPairsLegacyPassPass(Registry);
+  initializeFunctionCallsEliminationLegacyPassPass(Registry);
   initializeScalarizerLegacyPassPass(Registry);
   initializeDSELegacyPassPass(Registry);
   initializeGuardWideningLegacyPassPass(Registry);

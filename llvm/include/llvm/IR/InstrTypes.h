@@ -1709,6 +1709,12 @@ public:
     addAttribute(AttributeList::FunctionIndex, Attribute::NoUnwind);
   }
 
+  /// Determine if the call can be elided
+  bool canBeElided() const { return hasFnAttr(Attribute::CanBeElided); }
+  void setCanBeElided() {
+    addAttribute(AttributeList::FunctionIndex, Attribute::CanBeElided);
+  }
+
   /// Determine if the invoke cannot be duplicated.
   bool cannotDuplicate() const { return hasFnAttr(Attribute::NoDuplicate); }
   void setCannotDuplicate() {

@@ -118,6 +118,9 @@ def NoCfCheck : EnumAttr<"nocf_check">;
 /// Function doesn't unwind stack.
 def NoUnwind : EnumAttr<"nounwind">;
 
+/// Whether the function can be elided
+def CanBeElided: EnumAttr<"can_be_elided">;
+
 /// Select optimizations for best fuzzing signal.
 def OptForFuzzing : EnumAttr<"optforfuzzing">;
 

@@ -884,6 +884,7 @@ Function *CodeExtractor::constructFunction(const ValueSet &inputs,
       case Attribute::ZExt:
       case Attribute::ImmArg:
       case Attribute::EndAttrKinds:
+      case Attribute::CanBeElided:
         continue;
       // Those attributes should be safe to propagate to the extracted function.
       case Attribute::AlwaysInline:

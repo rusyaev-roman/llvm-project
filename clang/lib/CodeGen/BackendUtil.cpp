@@ -192,6 +192,11 @@ static void addAddDiscriminatorsPass(const PassManagerBuilder &Builder,
   PM.add(createAddDiscriminatorsPass());
 }
 
+static void addFunctionCallsEliminationPass(const PassManagerBuilder &Builder,
+                                            legacy::PassManagerBase &PM) {
+  PM.add(createFunctionCallsEliminationPass());
+}
+
 static void addBoundsCheckingPass(const PassManagerBuilder &Builder,
                                   legacy::PassManagerBase &PM) {
   PM.add(createBoundsCheckingLegacyPass());
@@ -594,6 +599,9 @@ void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
 
   if (TM)
     TM->adjustPassManager(PMBuilder);
+
+  PMBuilder.addExtension(PassManagerBuilder::EP_ScalarOptimizerLate,
+                         addFunctionCallsEliminationPass);
 
   if (CodeGenOpts.DebugInfoForProfiling ||
       !CodeGenOpts.SampleProfileFile.empty())

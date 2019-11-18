@@ -59,7 +59,8 @@ CodeGen::arrangeFreeFunctionCall(CodeGenModule &CGM,
                                  FunctionType::ExtInfo info,
                                  RequiredArgs args) {
   return CGM.getTypes().arrangeLLVMFunctionInfo(
-      returnType, /*instanceMethod=*/false, /*chainCall=*/false, argTypes,
+      returnType, /*instanceMethod=*/false, /*chainCall=*/false,
+      /*canBeElided=*/false, argTypes,
       info, {}, args);
 }
 

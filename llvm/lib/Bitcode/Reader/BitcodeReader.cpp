@@ -1225,6 +1225,7 @@ static uint64_t getRawAttributeMask(Attribute::AttrKind Val) {
   case Attribute::InReg:           return 1 << 3;
   case Attribute::StructRet:       return 1 << 4;
   case Attribute::NoUnwind:        return 1 << 5;
+  case Attribute::CanBeElided:     return 3 << 5;
   case Attribute::NoAlias:         return 1 << 6;
   case Attribute::ByVal:           return 1 << 7;
   case Attribute::Nest:            return 1 << 8;
@@ -1481,6 +1482,8 @@ static Attribute::AttrKind getAttrFromCode(uint64_t Code) {
     return Attribute::NoCfCheck;
   case bitc::ATTR_KIND_NO_UNWIND:
     return Attribute::NoUnwind;
+  case bitc::ATTR_KIND_CAN_BE_ELIDED:
+    return Attribute::CanBeElided;
   case bitc::ATTR_KIND_OPT_FOR_FUZZING:
     return Attribute::OptForFuzzing;
   case bitc::ATTR_KIND_OPTIMIZE_FOR_SIZE:
