@@ -922,6 +922,8 @@ def fno_dwarf2_cfi_asm : Flag<["-"], "fno-dwarf2-cfi-asm">, Group<clang_ignored_
 def fdwarf_directory_asm : Flag<["-"], "fdwarf-directory-asm">, Group<f_Group>;
 def fno_dwarf_directory_asm : Flag<["-"], "fno-dwarf-directory-asm">, Group<f_Group>, Flags<[CC1Option]>;
 def felide_constructors : Flag<["-"], "felide-constructors">, Group<f_Group>;
+def fultimate_copy_elision : Flag<["-"], "fultimate-copy-elision">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Enable aggressive C++ copy elision">;
 def fno_elide_type : Flag<["-"], "fno-elide-type">, Group<f_Group>,
     Flags<[CC1Option]>,
     HelpText<"Do not elide types when printing diagnostics">;
@@ -1544,6 +1546,8 @@ def fno_dollars_in_identifiers : Flag<["-"], "fno-dollars-in-identifiers">, Grou
   HelpText<"Disallow '$' in identifiers">, Flags<[CC1Option]>;
 def fno_elide_constructors : Flag<["-"], "fno-elide-constructors">, Group<f_Group>,
   HelpText<"Disable C++ copy constructor elision">, Flags<[CC1Option]>;
+def fno_ultimate_copy_elision: Flag<["-"], "fno-ultimate-copy-elision">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Disable aggressive C++ copy elision">;
 def fno_eliminate_unused_debug_symbols : Flag<["-"], "fno-eliminate-unused-debug-symbols">, Group<f_Group>;
 def fno_exceptions : Flag<["-"], "fno-exceptions">, Group<f_Group>;
 def fno_gnu_keywords : Flag<["-"], "fno-gnu-keywords">, Group<f_Group>, Flags<[CC1Option]>;

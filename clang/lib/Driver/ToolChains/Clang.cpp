@@ -5481,6 +5481,12 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                    options::OPT_felide_constructors, false))
     CmdArgs.push_back("-fno-elide-constructors");
 
+  if (Args.hasFlag(options::OPT_fultimate_copy_elision,
+                   options::OPT_fno_ultimate_copy_elision, false) &&
+      types::isCXX(InputType)) {
+    CmdArgs.push_back("-fultimate-copy-elision");
+  }
+
   ToolChain::RTTIMode RTTIMode = TC.getRTTIMode();
 
   if (KernelOrKext || (types::isCXX(InputType) &&

@@ -89,6 +89,12 @@ FunctionPass *createAggressiveDCEPass();
 
 //===----------------------------------------------------------------------===//
 //
+// TODO
+//
+FunctionPass *createCXXCopyElisionPass();
+
+//===----------------------------------------------------------------------===//
+//
 // GuardWidening - An optimization over the @llvm.experimental.guard intrinsic
 // that (optimistically) combines multiple guards into one to have fewer checks
 // at runtime.

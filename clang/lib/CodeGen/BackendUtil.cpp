@@ -204,6 +204,11 @@ static void addAddDiscriminatorsPass(const PassManagerBuilder &Builder,
   PM.add(createAddDiscriminatorsPass());
 }
 
+static void addCXXCopyElisionPass(const PassManagerBuilder &Builder,
+                                  legacy::PassManagerBase &PM) {
+  PM.add(createCXXCopyElisionPass());
+}
+
 static void addBoundsCheckingPass(const PassManagerBuilder &Builder,
                                   legacy::PassManagerBase &PM) {
   PM.add(createBoundsCheckingLegacyPass());
@@ -613,6 +618,10 @@ void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
 
   if (TM)
     TM->adjustPassManager(PMBuilder);
+
+  if (LangOpts.UltimateCopyElision)
+    PMBuilder.addExtension(PassManagerBuilder::EP_ScalarOptimizerLate,
+                           addCXXCopyElisionPass);
 
   if (CodeGenOpts.DebugInfoForProfiling ||
       !CodeGenOpts.SampleProfileFile.empty())

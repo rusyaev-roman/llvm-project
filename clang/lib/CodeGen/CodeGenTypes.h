@@ -266,6 +266,7 @@ public:
   const CGFunctionInfo &arrangeLLVMFunctionInfo(CanQualType returnType,
                                                 bool instanceMethod,
                                                 bool chainCall,
+                                                bool isCxxCMCtorOrDtor,
                                                 ArrayRef<CanQualType> argTypes,
                                                 FunctionType::ExtInfo info,
                     ArrayRef<FunctionProtoType::ExtParameterInfo> paramInfos,
