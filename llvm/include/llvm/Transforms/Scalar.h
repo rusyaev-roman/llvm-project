@@ -88,7 +88,7 @@ FunctionPass *createAggressiveDCEPass();
 //
 // TODO
 //
-FunctionPass *createFunctionCallsEliminationPass();
+FunctionPass *createCXXCopyElisionPass();
 
 //===----------------------------------------------------------------------===//
 //

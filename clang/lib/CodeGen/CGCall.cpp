@@ -106,7 +106,7 @@ CodeGenTypes::arrangeFreeFunctionType(CanQual<FunctionNoProtoType> FTNP) {
   return arrangeLLVMFunctionInfo(FTNP->getReturnType().getUnqualifiedType(),
                                  /*instanceMethod=*/false,
                                  /*chainCall=*/false,
-                                 /*canBeElided=*/ false, None,
+                                 /*isCxxCMCtorOrDtor=*/ false, None,
                                  FTNP->getExtInfo(), {}, RequiredArgs(0));
 }
 
@@ -184,7 +184,7 @@ arrangeLLVMFunctionInfo(CodeGenTypes &CGT, bool instanceMethod,
 
   return CGT.arrangeLLVMFunctionInfo(resultType, instanceMethod,
                                      /*chainCall=*/false,
-                                     /*canBeElided=*/ false, prefix,
+                                     /*isCxxCMCtorOrDtor=*/ false, prefix,
                                      FTP->getExtInfo(), paramInfos,
                                      Required);
 }
@@ -312,7 +312,7 @@ CodeGenTypes::arrangeCXXStructorDeclaration(GlobalDecl GD) {
   argTypes.push_back(DeriveThisType(MD->getParent(), MD));
 
   bool PassParams = true;
-  bool canBeElided = false;
+  bool isCxxCMCtorOrDtor = false;
 
   if (auto *CD = dyn_cast<CXXConstructorDecl>(MD)) {
     // A base class inheriting constructor doesn't get forwarded arguments
@@ -321,7 +321,7 @@ CodeGenTypes::arrangeCXXStructorDeclaration(GlobalDecl GD) {
       PassParams = inheritingCtorHasParams(Inherited, GD.getCtorType());
 
   } else if (isa<CXXDestructorDecl>(MD)) {
-    canBeElided = true;
+    isCxxCMCtorOrDtor = true;
   }
 
   CanQual<FunctionProtoType> FTP = GetFormalType(MD);
@@ -354,7 +354,7 @@ CodeGenTypes::arrangeCXXStructorDeclaration(GlobalDecl GD) {
                                      : Context.VoidTy;
   return arrangeLLVMFunctionInfo(resultType, /*instanceMethod=*/true,
                                  /*chainCall=*/false,
-                                 canBeElided, argTypes, extInfo,
+                                 isCxxCMCtorOrDtor, argTypes, extInfo,
                                  paramInfos, required);
 }
 
@@ -429,10 +429,11 @@ CodeGenTypes::arrangeCXXConstructorCall(const CallArgList &args,
     addExtParameterInfosForCall(ParamInfos, FPT.getTypePtr(), TotalPrefixArgs,
                                 ArgTypes.size());
   }
-  bool canBeElided = (CtorKind == Ctor_Complete && D->isCopyOrMoveConstructor());
+  bool isCxxCMCtorOrDtor = (CtorKind == Ctor_Complete &&
+                            D->isCopyOrMoveConstructor());
   return arrangeLLVMFunctionInfo(ResultType, /*instanceMethod=*/true,
                                  /*chainCall=*/false,
-                                 canBeElided, ArgTypes, Info,
+                                 isCxxCMCtorOrDtor, ArgTypes, Info,
                                  ParamInfos, Required);
 }
 
@@ -454,7 +455,7 @@ CodeGenTypes::arrangeFunctionDeclaration(const FunctionDecl *FD) {
   if (CanQual<FunctionNoProtoType> noProto = FTy.getAs<FunctionNoProtoType>()) {
     return arrangeLLVMFunctionInfo(
         noProto->getReturnType(), /*instanceMethod=*/false,
-        /*chainCall=*/false, /*canBeElided=*/false,
+        /*chainCall=*/false, /*isCxxCMCtorOrDtor=*/false,
         None, noProto->getExtInfo(), {},RequiredArgs::All);
   }
 
@@ -504,7 +505,7 @@ CodeGenTypes::arrangeObjCMessageSendSignature(const ObjCMethodDecl *MD,
 
   return arrangeLLVMFunctionInfo(
       GetReturnType(MD->getReturnType()), /*instanceMethod=*/false,
-      /*chainCall=*/false, /*canBeElided=*/false,
+      /*chainCall=*/false, /*isCxxCMCtorOrDtor=*/false,
       argTys, einfo, extParamInfos, required);
 }
 
@@ -516,7 +517,7 @@ CodeGenTypes::arrangeUnprototypedObjCMessageSend(QualType returnType,
 
   return arrangeLLVMFunctionInfo(
       GetReturnType(returnType), /*instanceMethod=*/false,
-      /*chainCall=*/false, /*canBeElided=*/false, argTypes,
+      /*chainCall=*/false, /*isCxxCMCtorOrDtor=*/false, argTypes,
       einfo, {}, RequiredArgs::All);
 }
 
@@ -544,7 +545,7 @@ CodeGenTypes::arrangeUnprototypedMustTailThunk(const CXXMethodDecl *MD) {
   CanQualType ArgTys[] = {DeriveThisType(MD->getParent(), MD)};
   return arrangeLLVMFunctionInfo(Context.VoidTy, /*instanceMethod=*/false,
                                  /*chainCall=*/false,
-                                 /*canBeElided=*/false, ArgTys,
+                                 /*isCxxCMCtorOrDtor=*/false, ArgTys,
                                  FTP->getExtInfo(), {}, RequiredArgs(1));
 }
 
@@ -565,7 +566,7 @@ CodeGenTypes::arrangeMSCtorClosure(const CXXConstructorDecl *CD,
       /*IsVariadic=*/false, /*IsCXXMethod=*/true);
   return arrangeLLVMFunctionInfo(Context.VoidTy, /*instanceMethod=*/true,
                                  /*chainCall=*/false,
-                                 /*canBeElided=*/false, ArgTys,
+                                 /*isCxxCMCtorOrDtor=*/false, ArgTys,
                                  FunctionType::ExtInfo(CC), {},
                                  RequiredArgs::All);
 }
@@ -612,7 +613,7 @@ arrangeFreeFunctionLikeCall(CodeGenTypes &CGT,
     argTypes.push_back(CGT.getContext().getCanonicalParamType(arg.Ty));
   return CGT.arrangeLLVMFunctionInfo(GetReturnType(fnType->getReturnType()),
                                      /*instanceMethod=*/false,
-                                     /*canBeElided=*/false, chainCall,
+                                     /*isCxxCMCtorOrDtor=*/false, chainCall,
                                      argTypes, fnType->getExtInfo(), paramInfos,
                                      required);
 }
@@ -646,7 +647,7 @@ CodeGenTypes::arrangeBlockFunctionDeclaration(const FunctionProtoType *proto,
 
   return arrangeLLVMFunctionInfo(GetReturnType(proto->getReturnType()),
                                  /*instanceMethod*/ false, /*chainCall*/ false,
-                                 /*canBeElided=*/false, argTypes,
+                                 /*isCxxCMCtorOrDtor=*/false, argTypes,
                                  proto->getExtInfo(), paramInfos,
                                  RequiredArgs::forPrototypePlus(proto, 1));
 }
@@ -660,7 +661,7 @@ CodeGenTypes::arrangeBuiltinFunctionCall(QualType resultType,
     argTypes.push_back(Context.getCanonicalParamType(Arg.Ty));
   return arrangeLLVMFunctionInfo(
       GetReturnType(resultType), /*instanceMethod=*/false,
-      /*chainCall=*/false, /*canBeElided=*/false, argTypes,
+      /*chainCall=*/false, /*isCxxCMCtorOrDtor=*/false, argTypes,
       FunctionType::ExtInfo(), /*paramInfos=*/ {}, RequiredArgs::All);
 }
 
@@ -671,7 +672,7 @@ CodeGenTypes::arrangeBuiltinFunctionDeclaration(QualType resultType,
 
   return arrangeLLVMFunctionInfo(
       GetReturnType(resultType), /*instanceMethod=*/false, /*chainCall=*/false,
-      /*canBeElided=*/false, argTypes, FunctionType::ExtInfo(),
+      /*isCxxCMCtorOrDtor=*/false, argTypes, FunctionType::ExtInfo(),
       {}, RequiredArgs::All);
 }
 
@@ -680,7 +681,7 @@ CodeGenTypes::arrangeBuiltinFunctionDeclaration(CanQualType resultType,
                                               ArrayRef<CanQualType> argTypes) {
   return arrangeLLVMFunctionInfo(
       resultType, /*instanceMethod=*/false, /*chainCall=*/false,
-      /*canBeElided=*/false, argTypes, FunctionType::ExtInfo(),
+      /*isCxxCMCtorOrDtor=*/false, argTypes, FunctionType::ExtInfo(),
       {}, RequiredArgs::All);
 }
 
@@ -706,14 +707,14 @@ CodeGenTypes::arrangeCXXMethodCall(const CallArgList &args,
   FunctionType::ExtInfo info = proto->getExtInfo();
   return arrangeLLVMFunctionInfo(
       GetReturnType(proto->getReturnType()), /*instanceMethod=*/true,
-      /*chainCall=*/false, /*canBeElided=*/false, argTypes, info,
+      /*chainCall=*/false, /*isCxxCMCtorOrDtor=*/false, argTypes, info,
       paramInfos, required);
 }
 
 const CGFunctionInfo &CodeGenTypes::arrangeNullaryFunction() {
   return arrangeLLVMFunctionInfo(
       getContext().VoidTy, /*instanceMethod=*/false, /*chainCall=*/false,
-      /*canBeElided=*/false, None, FunctionType::ExtInfo(),
+      /*isCxxCMCtorOrDtor=*/false, None, FunctionType::ExtInfo(),
       {}, RequiredArgs::All);
 }
 
@@ -737,7 +738,7 @@ CodeGenTypes::arrangeCall(const CGFunctionInfo &signature,
   return arrangeLLVMFunctionInfo(signature.getReturnType(),
                                  signature.isInstanceMethod(),
                                  signature.isChainCall(),
-                                 signature.canBeElided(),
+                                 signature.isCxxCMCtorOrDtor(),
                                  argTypes,
                                  signature.getExtInfo(),
                                  paramInfos,
@@ -757,7 +758,7 @@ const CGFunctionInfo &
 CodeGenTypes::arrangeLLVMFunctionInfo(CanQualType resultType,
                                       bool instanceMethod,
                                       bool chainCall,
-                                      bool canBeElided,
+                                      bool isCxxCMCtorOrDtor,
                                       ArrayRef<CanQualType> argTypes,
                                       FunctionType::ExtInfo info,
                      ArrayRef<FunctionProtoType::ExtParameterInfo> paramInfos,
@@ -778,8 +779,8 @@ CodeGenTypes::arrangeLLVMFunctionInfo(CanQualType resultType,
   unsigned CC = ClangCallConvToLLVMCallConv(info.getCC());
 
   // Construct the function info.  We co-allocate the ArgInfos.
-  FI = CGFunctionInfo::create(CC, instanceMethod, chainCall, canBeElided, info,
-                              paramInfos, resultType, argTypes, required);
+  FI = CGFunctionInfo::create(CC, instanceMethod, chainCall, isCxxCMCtorOrDtor,
+                              info, paramInfos, resultType, argTypes, required);
   FunctionInfos.InsertNode(FI, insertPos);
 
   bool inserted = FunctionsBeingProcessed.insert(FI).second;
@@ -817,7 +818,7 @@ CodeGenTypes::arrangeLLVMFunctionInfo(CanQualType resultType,
 CGFunctionInfo *CGFunctionInfo::create(unsigned llvmCC,
                                        bool instanceMethod,
                                        bool chainCall,
-                                       bool canBeElided,
+                                       bool isCxxCMCtorOrDtor,
                                        const FunctionType::ExtInfo &info,
                                        ArrayRef<ExtParameterInfo> paramInfos,
                                        CanQualType resultType,
@@ -838,7 +839,7 @@ CGFunctionInfo *CGFunctionInfo::create(unsigned llvmCC,
   FI->InstanceMethod = instanceMethod;
   FI->ChainCall = chainCall;
   FI->NoReturn = info.getNoReturn();
-  FI->CanBeElided = canBeElided;
+  FI->CxxCMCtorOrDtor = isCxxCMCtorOrDtor;
   FI->ReturnsRetained = info.getProducesResult();
   FI->NoCallerSavedRegs = info.getNoCallerSavedRegs();
   FI->NoCfCheck = info.getNoCfCheck();
@@ -1866,8 +1867,8 @@ void CodeGenModule::ConstructAttributeList(
   if (FI.isNoReturn())
     FuncAttrs.addAttribute(llvm::Attribute::NoReturn);
 
-  if (FI.canBeElided())
-    FuncAttrs.addAttribute(llvm::Attribute::CanBeElided);
+  if (FI.isCxxCMCtorOrDtor())
+    FuncAttrs.addAttribute(llvm::Attribute::CxxCMCtorOrDtor);
 
   // If we have information about the function prototype, we can learn
   // attributes from there.

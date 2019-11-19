@@ -501,8 +501,8 @@ class CGFunctionInfo final
   /// Whether this function is noreturn.
   unsigned NoReturn : 1;
 
-  /// Whether this function can be elided.
-  unsigned CanBeElided : 1;
+  /// Function is c++ copy/move constructor or destructor.
+  unsigned CxxCMCtorOrDtor : 1;
 
   /// Whether this function is returns-retained.
   unsigned ReturnsRetained : 1;
@@ -547,7 +547,7 @@ public:
   static CGFunctionInfo *create(unsigned llvmCC,
                                 bool instanceMethod,
                                 bool chainCall,
-                                bool canBeElided,
+                                bool isCxxCMCtorOrDtor,
                                 const FunctionType::ExtInfo &extInfo,
                                 ArrayRef<ExtParameterInfo> paramInfos,
                                 CanQualType resultType,
@@ -595,7 +595,7 @@ public:
 
   bool isNoReturn() const { return NoReturn; }
 
-  bool canBeElided() const { return CanBeElided; }
+  bool isCxxCMCtorOrDtor() const { return CxxCMCtorOrDtor; }
 
   /// In ARC, whether this function retains its return value.  This
   /// is not always reliable for call sites.
@@ -668,7 +668,7 @@ public:
     ID.AddBoolean(InstanceMethod);
     ID.AddBoolean(ChainCall);
     ID.AddBoolean(NoReturn);
-    ID.AddBoolean(CanBeElided);
+    ID.AddBoolean(CxxCMCtorOrDtor);
     ID.AddBoolean(ReturnsRetained);
     ID.AddBoolean(NoCallerSavedRegs);
     ID.AddBoolean(HasRegParm);

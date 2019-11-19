@@ -1709,10 +1709,12 @@ public:
     addAttribute(AttributeList::FunctionIndex, Attribute::NoUnwind);
   }
 
-  /// Determine if the call can be elided
-  bool canBeElided() const { return hasFnAttr(Attribute::CanBeElided); }
-  void setCanBeElided() {
-    addAttribute(AttributeList::FunctionIndex, Attribute::CanBeElided);
+  /// Determine if calls c++ copy/move constructor or destructor
+  bool isCxxCMCtorOrDtor() const {
+    return hasFnAttr(Attribute::CxxCMCtorOrDtor);
+  }
+  void setIsCxxCMCtorOrDtor() {
+    addAttribute(AttributeList::FunctionIndex, Attribute::CxxCMCtorOrDtor);
   }
 
   /// Determine if the invoke cannot be duplicated.

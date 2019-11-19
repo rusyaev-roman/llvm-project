@@ -46,7 +46,7 @@ static Attribute::AttrKind parseAttrKind(StringRef Kind) {
       .Case("nocf_check", Attribute::NoCfCheck)
       .Case("norecurse", Attribute::NoRecurse)
       .Case("nounwind", Attribute::NoUnwind)
-      .Case("can_be_elided", Attribute::CanBeElided)
+      .Case("cxx_cm_ctor_or_dtor", Attribute::CxxCMCtorOrDtor)
       .Case("optforfuzzing", Attribute::OptForFuzzing)
       .Case("optnone", Attribute::OptimizeNone)
       .Case("optsize", Attribute::OptimizeForSize)

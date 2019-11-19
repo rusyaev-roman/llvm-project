@@ -209,7 +209,7 @@ enum Kind {
   kw_noreturn,
   kw_nosync,
   kw_nocf_check,
-  kw_can_be_elided,
+  kw_cxx_cmctor_or_dtor,
   kw_nounwind,
   kw_optforfuzzing,
   kw_optnone,

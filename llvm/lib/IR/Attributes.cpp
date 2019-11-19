@@ -276,8 +276,8 @@ std::pair<unsigned, Optional<unsigned>> Attribute::getAllocSizeArgs() const {
 std::string Attribute::getAsString(bool InAttrGrp) const {
   if (!pImpl) return {};
 
-  if (hasAttribute(Attribute::CanBeElided))
-    return "can_be_elided";
+  if (hasAttribute(Attribute::CxxCMCtorOrDtor))
+    return "cxx_cm_ctor_or_dtor";
   if (hasAttribute(Attribute::SanitizeAddress))
     return "sanitize_address";
   if (hasAttribute(Attribute::SanitizeHWAddress))

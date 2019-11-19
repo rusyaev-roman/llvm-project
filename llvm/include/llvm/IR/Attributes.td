@@ -118,8 +118,8 @@ def NoCfCheck : EnumAttr<"nocf_check">;
 /// Function doesn't unwind stack.
 def NoUnwind : EnumAttr<"nounwind">;
 
-/// Whether the function can be elided
-def CanBeElided: EnumAttr<"can_be_elided">;
+/// Function is c++ copy/move constructor or destructor
+def CxxCMCtorOrDtor: EnumAttr<"cxx_cm_ctor_or_dtor">;
 
 /// Select optimizations for best fuzzing signal.
 def OptForFuzzing : EnumAttr<"optforfuzzing">;

@@ -633,7 +633,7 @@ enum AttributeKindCodes {
   ATTR_KIND_NOFREE = 62,
   ATTR_KIND_NOSYNC = 63,
   ATTR_KIND_SANITIZE_MEMTAG = 64,
-  ATTR_KIND_CAN_BE_ELIDED = 65,
+  ATTR_KIND_CXX_CMCTOR_OR_DTOR = 65,
 };
 
 enum ComdatSelectionKindCodes {

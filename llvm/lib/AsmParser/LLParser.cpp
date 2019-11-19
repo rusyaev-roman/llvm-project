@@ -1292,7 +1292,8 @@ bool LLParser::ParseFnAttributeValuePairs(AttrBuilder &B,
     case lltok::kw_nocf_check: B.addAttribute(Attribute::NoCfCheck); break;
     case lltok::kw_norecurse: B.addAttribute(Attribute::NoRecurse); break;
     case lltok::kw_nounwind: B.addAttribute(Attribute::NoUnwind); break;
-    case lltok::kw_can_be_elided: B.addAttribute(Attribute::CanBeElided); break;
+    case lltok::kw_cxx_cmctor_or_dtor:
+      B.addAttribute(Attribute::CxxCMCtorOrDtor); break;
     case lltok::kw_optforfuzzing:
       B.addAttribute(Attribute::OptForFuzzing); break;
     case lltok::kw_optnone: B.addAttribute(Attribute::OptimizeNone); break;
