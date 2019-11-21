@@ -600,8 +600,9 @@ void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
   if (TM)
     TM->adjustPassManager(PMBuilder);
 
-  PMBuilder.addExtension(PassManagerBuilder::EP_ScalarOptimizerLate,
-                         addCXXCopyElisionPass);
+  if (LangOpts.UltimateCopyElision)
+    PMBuilder.addExtension(PassManagerBuilder::EP_ScalarOptimizerLate,
+                           addCXXCopyElisionPass);
 
   if (CodeGenOpts.DebugInfoForProfiling ||
       !CodeGenOpts.SampleProfileFile.empty())

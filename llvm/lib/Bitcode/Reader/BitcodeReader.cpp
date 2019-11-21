@@ -1225,7 +1225,6 @@ static uint64_t getRawAttributeMask(Attribute::AttrKind Val) {
   case Attribute::InReg:           return 1 << 3;
   case Attribute::StructRet:       return 1 << 4;
   case Attribute::NoUnwind:        return 1 << 5;
-  case Attribute::CxxCMCtorOrDtor: return 3 << 5;
   case Attribute::NoAlias:         return 1 << 6;
   case Attribute::ByVal:           return 1 << 7;
   case Attribute::Nest:            return 1 << 8;
@@ -1301,6 +1300,9 @@ static uint64_t getRawAttributeMask(Attribute::AttrKind Val) {
   case Attribute::SanitizeMemTag:
     llvm_unreachable("sanitize_memtag attribute not supported in raw format");
     break;
+  case Attribute::CxxCMCtorOrDtor:
+    llvm_unreachable("cxx_ctor_or_dtor attribute not supported in raw format");
+    break;
   }
   llvm_unreachable("Unsupported attribute type");
 }
@@ -1315,6 +1317,7 @@ static void addRawAttributeValue(AttrBuilder &B, uint64_t Val) {
         I == Attribute::DereferenceableOrNull ||
         I == Attribute::ArgMemOnly ||
         I == Attribute::AllocSize ||
+        I == Attribute::CxxCMCtorOrDtor ||
         I == Attribute::NoSync)
       continue;
     if (uint64_t A = (Val & getRawAttributeMask(I))) {

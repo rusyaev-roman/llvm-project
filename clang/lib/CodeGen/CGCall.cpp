@@ -312,16 +312,15 @@ CodeGenTypes::arrangeCXXStructorDeclaration(GlobalDecl GD) {
   argTypes.push_back(DeriveThisType(MD->getParent(), MD));
 
   bool PassParams = true;
-  bool isCxxCMCtorOrDtor = false;
+
+  bool isCxxCMCtorOrDtor = Context.getLangOpts().UltimateCopyElision &&
+                           isa<CXXDestructorDecl>(MD);
 
   if (auto *CD = dyn_cast<CXXConstructorDecl>(MD)) {
     // A base class inheriting constructor doesn't get forwarded arguments
     // needed to construct a virtual base (or base class thereof).
     if (auto Inherited = CD->getInheritedConstructor())
       PassParams = inheritingCtorHasParams(Inherited, GD.getCtorType());
-
-  } else if (isa<CXXDestructorDecl>(MD)) {
-    isCxxCMCtorOrDtor = true;
   }
 
   CanQual<FunctionProtoType> FTP = GetFormalType(MD);
@@ -430,7 +429,8 @@ CodeGenTypes::arrangeCXXConstructorCall(const CallArgList &args,
                                 ArgTypes.size());
   }
   bool isCxxCMCtorOrDtor = (CtorKind == Ctor_Complete &&
-                            D->isCopyOrMoveConstructor());
+                            D->isCopyOrMoveConstructor()) &&
+                           Context.getLangOpts().UltimateCopyElision;
   return arrangeLLVMFunctionInfo(ResultType, /*instanceMethod=*/true,
                                  /*chainCall=*/false,
                                  isCxxCMCtorOrDtor, ArgTypes, Info,

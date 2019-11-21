@@ -1668,6 +1668,7 @@ bool LLParser::ParseOptionalParamAttrs(AttrBuilder &B) {
     case lltok::kw_noreturn:
     case lltok::kw_nocf_check:
     case lltok::kw_nounwind:
+    case lltok::kw_cxx_cmctor_or_dtor:
     case lltok::kw_optforfuzzing:
     case lltok::kw_optnone:
     case lltok::kw_optsize:
@@ -1767,6 +1768,7 @@ bool LLParser::ParseOptionalReturnAttrs(AttrBuilder &B) {
     case lltok::kw_noreturn:
     case lltok::kw_nocf_check:
     case lltok::kw_nounwind:
+    case lltok::kw_cxx_cmctor_or_dtor:
     case lltok::kw_optforfuzzing:
     case lltok::kw_optnone:
     case lltok::kw_optsize:

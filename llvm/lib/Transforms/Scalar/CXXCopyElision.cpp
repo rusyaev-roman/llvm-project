@@ -13,11 +13,12 @@
 // 4. Add comments and make code cleanup
 //===----------------------------------------------------------------------===//
 
-#include <llvm/Analysis/CFG.h>
+#include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/IR/Function.h"
-#include <llvm/IR/InstrTypes.h>
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
@@ -28,6 +29,10 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "cxx_copy_elision"
+
+STATISTIC(NumErasedCMCtors, "Number of erased copy/move constructors");
+STATISTIC(NumErasedDtors, "Number of erased destructors");
+STATISTIC(NumErasedIns, "Number of all erased unnecessary instructions");
 
 namespace {
 
@@ -199,18 +204,20 @@ public:
     for (auto &Call : CtorVec) {
       if (canCtorBeElided(*Call)) {
         DeadInstList.push_back(Call);
+        NumErasedCMCtors++;
 
         while (!DeadInstList.empty()) {
           auto *EI = DeadInstList.pop_back_val();
 
+          NumErasedIns++;
+          if (isCxxDtor(*EI))
+            NumErasedDtors++;
+
           LLVM_DEBUG(dbgs() << "*** Erase Inst *** : " << *EI << "\n");
           assert(!EI->getNumUses() && "Erased instruction has uses");
 
-          if (auto* EII = dyn_cast<InvokeInst>(EI)) {
-            auto* PrevIns = EII->getPrevNode();
-            changeToCall(EII);
-            EI = PrevIns->getNextNode();
-          }
+          if (auto* EII = dyn_cast<InvokeInst>(EI))
+            EI = changeToCall(EII);
 
           EI->eraseFromParent();
         }
@@ -316,6 +323,7 @@ private:
                         << "\n*** Create Cast (new To) *** : " << *To << "\n");
     }
 
+    NumErasedIns++;
     From->replaceAllUsesWith(To);
     From->eraseFromParent();
   }
