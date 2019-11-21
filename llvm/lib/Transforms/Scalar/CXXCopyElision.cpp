@@ -64,14 +64,19 @@ bool isCxxDtor(const Value& V) {
 
 bool isTrivialInstruction(const Instruction &I) {
   if (auto *II = dyn_cast<IntrinsicInst>(&I))
-    if (!II->isLifetimeStartOrEnd())
-      return false;
+    if (II->isLifetimeStartOrEnd())
+      return true;
 
   if (isCxxDtor(I))
     return true;
 
-  return (isa<BitCastInst>(I) || isa<GetElementPtrInst>(I)) &&
-         onlyUsedByLifetimeMarkers(&I);
+  if (isa<GetElementPtrInst>(&I) && onlyUsedByLifetimeMarkers(&I))
+    return true;
+
+  if (isa<BitCastInst>(I) && onlyUsedByLifetimeMarkers(&I))
+    return true;
+
+  return false;
 }
 
 DtorVector findImmediateCopiedDtors(Instruction& I) {
@@ -105,21 +110,41 @@ DtorVector findImmediateCopiedDtors(Instruction& I) {
 }
 
 bool isCtorEliminationSafe(const Instruction& Ctor,
-                           const Instruction& AllocaUse,
+                           const Instruction& ObjUse,
                            const DtorVector& SubObjDtors) {
-  if (isPotentiallyReachable(&Ctor, &AllocaUse)) {
+  if (isPotentiallyReachable(&Ctor, &ObjUse)) {
     for (const auto* Dtor : SubObjDtors) {
       assert(isPotentiallyReachable(&Ctor, Dtor) &&
              "dtor is not reached by copy/move ctor");
 
       // check that this instruction is not sub-object destructor
-      auto *GEP = dyn_cast<GetElementPtrInst>(&AllocaUse);
+      auto *GEP = dyn_cast<GetElementPtrInst>(&ObjUse);
       if (GEP && GEP->hasOneUse() && isCxxDtor(*(*GEP->users().begin())))
         continue;
 
-      if (!isPotentiallyReachable(Dtor, &AllocaUse))
+      if (!isPotentiallyReachable(Dtor, &ObjUse))
         return false;
     }
+  }
+
+  return true;
+}
+
+bool areGEPsEqual(const GetElementPtrInst& GEP1,
+                  const GetElementPtrInst& GEP2) {
+
+  if (GEP1.getNumOperands() != GEP2.getNumOperands())
+    return false;
+
+  for (unsigned i = 1, e = GEP1.getNumOperands(); i != e; ++i) {
+    ConstantInt *CI1 = dyn_cast<ConstantInt>(GEP1.getOperand(i));
+    ConstantInt *CI2 = dyn_cast<ConstantInt>(GEP2.getOperand(i));
+
+    if (!CI1 || !CI2)
+      return false;
+
+    if (CI1->getValue() != CI2->getValue())
+      return false;
   }
 
   return true;
@@ -239,6 +264,12 @@ private:
 
       // remove all trivial instructions later
       if (isTrivialInstruction(*I)) {
+        if (isa<GetElementPtrInst>(I) && isa<GetElementPtrInst>(ImmFrom)
+            && !areGEPsEqual(cast<GetElementPtrInst>(*I),
+                             cast<GetElementPtrInst>(*ImmFrom)))
+          // erase lifetime markers only for current sub-object
+          continue;
+
         InstList.push_back(I);
         for (auto* UI : I->users())
           InstList.push_back(cast<Instruction>(UI));
@@ -298,7 +329,7 @@ private:
     return VSize.getValue() < ObjSize.getValue();
   }
 
-  const DataLayout* DL;
+  const DataLayout* DL = nullptr;
 
   SmallVector<Instruction *, 32> DeadInstList;
   Instruction *From = nullptr;
