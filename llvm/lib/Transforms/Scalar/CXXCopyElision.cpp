@@ -8,29 +8,33 @@
 //
 // TODO
 // 1. Add description of pass
-// 2. Handle different alloca types (create bitcast)
-// 3. Handle invoke instr
-// 4. Use DOM tree?
-// 5. Don't apply for volatile objects
-// 6. Add comments and make cleanup
+// 2. Use DOM tree for speedup?
+// 3. Don't apply for volatile objects
+// 4. Add comments and make code cleanup
 //===----------------------------------------------------------------------===//
 
 #include <llvm/Analysis/CFG.h>
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/InstVisitor.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/IR/Function.h"
+#include <llvm/IR/InstrTypes.h>
+#include "llvm/IR/InstVisitor.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
-#include <llvm/IR/InstrTypes.h>
+#include "llvm/Transforms/Utils/Local.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "cxx_copy_elision"
 
 namespace {
+
+class CXXCopyElisionLegacyPass;
+
+using CtorVector = SmallVector<CallBase *, 32>;
+using DtorVector = SmallVector<Instruction*, 2>;
 
 bool isCxxCMCtor(const CallBase& CB) {
   return CB.isCxxCMCtorOrDtor() && (CB.getNumArgOperands() == 2);
@@ -47,13 +51,79 @@ bool isCxxDtor(const Instruction& I) {
   return false;
 }
 
-bool isCxxCMCtorOrDtor(const CallBase& CB) {
-  return isCxxCMCtor(CB) || isCxxDtor(CB);
+bool isCxxDtor(const Value& V) {
+  if (auto* I = dyn_cast<Instruction>(&V)) {
+    return isCxxDtor(*I);
+  }
+  return false;
 }
 
-class CXXCopyElisionLegacyPass;
+//bool isCxxCMCtorOrDtor(const CallBase& CB) {
+//  return isCxxCMCtor(CB) || isCxxDtor(CB);
+//}
 
-using CtorVector = SmallVector<CallBase *, 32>;
+bool isTrivialInstruction(const Instruction &I) {
+  if (auto *II = dyn_cast<IntrinsicInst>(&I))
+    if (!II->isLifetimeStartOrEnd())
+      return false;
+
+  if (isCxxDtor(I))
+    return true;
+
+  return (isa<BitCastInst>(I) || isa<GetElementPtrInst>(I)) &&
+         onlyUsedByLifetimeMarkers(&I);
+}
+
+DtorVector findImmediateCopiedDtors(Instruction& I) {
+  DtorVector Dtors;
+
+  for (auto* IU : I.users()) {
+    auto* DI = dyn_cast<Instruction>(IU);
+
+    if (!DI)
+      continue;
+
+    if (isCxxDtor(*DI)) {
+      Dtors.push_back(DI);
+    } else if (auto *II = dyn_cast<IntrinsicInst>(&I)) {
+      if (II->getIntrinsicID() == Intrinsic::lifetime_end)
+        Dtors.push_back(DI);
+    } else if ((isa<BitCastInst>(DI) || isa<GetElementPtrInst>(DI))
+               && DI->hasOneUse()) {
+      auto U = DI->users().begin();
+      if (auto* UII = dyn_cast<IntrinsicInst>(*U)) {
+        if (UII->getIntrinsicID() == Intrinsic::lifetime_end)
+          Dtors.push_back(DI);
+      } else if (auto* UI = dyn_cast<Instruction>(*U)) {
+        if (isCxxDtor(*UI))
+          Dtors.push_back(DI);
+      }
+    }
+  }
+
+  return Dtors;
+}
+
+bool isCtorEliminationSafe(const Instruction& Ctor,
+                           const Instruction& AllocaUse,
+                           const DtorVector& SubObjDtors) {
+  if (isPotentiallyReachable(&Ctor, &AllocaUse)) {
+    for (const auto* Dtor : SubObjDtors) {
+      assert(isPotentiallyReachable(&Ctor, Dtor) &&
+             "dtor is not reached by copy/move ctor");
+
+      // check that this instruction is not sub-object destructor
+      auto *GEP = dyn_cast<GetElementPtrInst>(&AllocaUse);
+      if (GEP && GEP->hasOneUse() && isCxxDtor(*(*GEP->users().begin())))
+        continue;
+
+      if (!isPotentiallyReachable(Dtor, &AllocaUse))
+        return false;
+    }
+  }
+
+  return true;
+}
 
 class CtorVisitor : public InstVisitor<CtorVisitor> {
 public:
@@ -90,6 +160,8 @@ public:
     if (skipFunction(F))
       return false;
 
+    DL = &F.getParent()->getDataLayout();
+
     CtorVector CtorVec;
     CtorVisitor CV(F, CtorVec);
 
@@ -109,18 +181,23 @@ public:
           LLVM_DEBUG(dbgs() << "*** Erase Inst *** : " << *EI << "\n");
           assert(!EI->getNumUses() && "Erased instruction has uses");
 
+          if (auto* EII = dyn_cast<InvokeInst>(EI)) {
+            auto* PrevIns = EII->getPrevNode();
+            changeToCall(EII);
+            EI = PrevIns->getNextNode();
+          }
+
           EI->eraseFromParent();
         }
 
-        LLVM_DEBUG(dbgs() << "*** Replace Inst (From) *** : " << *From
-                          << "\n*** With (To) *** : " << *To << "\n");
-        From->replaceAllUsesWith(To);
-        if (!From->getNumUses())
-          From->eraseFromParent();
+        replaceCopiedObject();
 
         Changed = true;
       }
     }
+
+    if (Changed)
+      removeUnreachableBlocks(F);
 
     LLVM_DEBUG(dbgs() << "====================================\n");
 
@@ -129,23 +206,25 @@ public:
 
 private:
   bool canCtorBeElided(CallBase &Ctor) {
-    const auto &DL = Ctor.getFunction()->getParent()->getDataLayout();
+    auto *ObjTo = GetUnderlyingObject(Ctor.getOperand(0), *DL);
+    auto *ObjFrom = GetUnderlyingObject(Ctor.getOperand(1), *DL);
+    auto *ImmFrom = Ctor.getOperand(1);
 
-    auto *AllocTo = GetUnderlyingObject(Ctor.getOperand(0), DL);
-    auto *AllocFrom = GetUnderlyingObject(Ctor.getOperand(1), DL);
-    auto *ImmediateFrom = Ctor.getOperand(1);
+    auto* AllocFrom = dyn_cast<AllocaInst>(ObjFrom);
+    auto* AllocTo = dyn_cast<AllocaInst>(ObjTo);
+
+    // consider only automatic variables
+    if (!AllocTo || !AllocFrom)
+      return false;
 
     LLVM_DEBUG(dbgs() << "*** Ctor *** : " << Ctor
                       << "\n*** AllocTo *** : " << *AllocTo
                       << "\n*** AllocaFrom *** : " << *AllocFrom
-                      << "\n*** ImmFrom *** : " << *ImmediateFrom << "\n");
+                      << "\n*** ImmFrom *** : " << *ImmFrom << "\n");
 
-    // consider only automatic variables
-    if (!isa<AllocaInst>(AllocTo) || !isa<AllocaInst>(AllocFrom))
-      return false;
-
-    auto ImmDtors =
-        findImmediateCopiedDtors(cast<Instruction>(*ImmediateFrom));
+    DtorVector ImmDtors;
+    if (ImmFrom != AllocFrom)
+      ImmDtors = findImmediateCopiedDtors(cast<Instruction>(*ImmFrom));
 
     SmallVector<Instruction *, 32> InstList;
     for (auto* U : AllocFrom->users()) {
@@ -161,31 +240,26 @@ private:
       // remove all trivial instructions later
       if (isTrivialInstruction(*I)) {
         InstList.push_back(I);
-        for (auto* IU : I->users())
-          InstList.push_back(cast<Instruction>(IU));
+        for (auto* UI : I->users())
+          InstList.push_back(cast<Instruction>(UI));
         continue;
       }
 
-      if (isPotentiallyReachable(&Ctor, I)) {
-        bool CanBeElided = false;
-
-        for (const auto* Dtor : ImmDtors) {
-          assert(isPotentiallyReachable(&Ctor, Dtor) &&
-                 "dtor is not reached by copy/move ctor");
-          CanBeElided = isPotentiallyReachable(Dtor, I);
-          if (!CanBeElided)
-            break;
-        }
-
-        if (!CanBeElided)
-          return false;
-      }
+      if (!isCtorEliminationSafe(Ctor, *I, ImmDtors))
+        return false;
     }
 
-    From = cast<Instruction>(AllocFrom);
     To = cast<Instruction>(AllocTo);
-    DeadInstList = std::move(InstList);
+    if (isValueSubObjectOf(*AllocTo, *AllocFrom)) {
+      From = cast<Instruction>(ImmFrom);
+    } else {
+      From = AllocFrom;
+    }
 
+    DeadInstList = std::move(InstList);
+    if (!ImmDtors.empty())
+      DeadInstList.insert(DeadInstList.end(), ImmDtors.begin(),
+                          ImmDtors.end());
 #ifndef NDEBUG
     for (const auto* DI : DeadInstList)
       LLVM_DEBUG(dbgs() << "*** Dead Inst *** : " << *DI << "\n");
@@ -194,48 +268,37 @@ private:
     return true;
   }
 
-  bool isTrivialInstruction(const Instruction &I) {
-    if (auto *II = dyn_cast<IntrinsicInst>(&I))
-      if (!II->isLifetimeStartOrEnd())
-        return false;
+  void replaceCopiedObject() {
+    auto* FromType = From->getType();
+    auto* ToType = To->getType();
 
-    if (isCxxDtor(I))
-      return true;
+    LLVM_DEBUG(dbgs() << "*** Replace Inst (From) *** : " << *From
+                      << "\n*** With (To) *** : " << *To << "\n");
 
-    return (isa<BitCastInst>(I) || isa<GetElementPtrInst>(I)) &&
-           onlyUsedByLifetimeMarkers(&I);
-  }
+    if (FromType != ToType) {
+      To = CastInst::CreateBitOrPointerCast(
+          To, FromType, "cxx.elision.cast",
+          To->getNextNode());
 
-  SmallVector<const Instruction*, 2>
-  findImmediateCopiedDtors(const Instruction& I) {
-    SmallVector<const Instruction*, 2> Dtors;
-
-    for (auto* IU : I.users()) {
-      auto* DI = dyn_cast<Instruction>(IU);
-
-      if (!DI)
-        continue;
-
-      if (isCxxDtor(*DI)) {
-        Dtors.push_back(DI);
-      } else if (auto *II = dyn_cast<IntrinsicInst>(&I)) {
-        if (II->getIntrinsicID() == Intrinsic::lifetime_end)
-          Dtors.push_back(DI);
-      } else if ((isa<BitCastInst>(DI) || isa<GetElementPtrInst>(DI))
-                 && DI->hasOneUse()) {
-        auto U = DI->users().begin();
-        if (auto* UII = dyn_cast<IntrinsicInst>(*U)) {
-          if (II->getIntrinsicID() == Intrinsic::lifetime_end)
-            Dtors.push_back(DI);
-        } else if (auto* UI = dyn_cast<Instruction>(*U)) {
-          if (isCxxDtor(*UI))
-            Dtors.push_back(DI);
-        }
-      }
+      LLVM_DEBUG(dbgs() << "*** FromType *** : " << *FromType
+                        << "\n*** ToType *** : " << *ToType
+                        << "\n*** Create Cast (new To) *** : " << *To << "\n");
     }
 
-    return Dtors;
+    From->replaceAllUsesWith(To);
+    From->eraseFromParent();
   }
+
+  bool isValueSubObjectOf(const AllocaInst& V, const AllocaInst& Obj) const {
+    auto VSize = V.getAllocationSizeInBits(*DL);
+    auto ObjSize = Obj.getAllocationSizeInBits(*DL);
+
+    assert((VSize.hasValue() && ObjSize.hasValue()) && "Types must be sized");
+
+    return VSize.getValue() < ObjSize.getValue();
+  }
+
+  const DataLayout* DL;
 
   SmallVector<Instruction *, 32> DeadInstList;
   Instruction *From = nullptr;
