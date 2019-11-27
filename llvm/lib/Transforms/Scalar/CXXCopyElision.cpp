@@ -11,6 +11,8 @@
 // 2. Use DOM tree for speedup?
 // 3. Don't apply for volatile objects
 // 4. Add comments and make code cleanup
+// 5. Add additional attribute for clean-ups of replaced object
+//    (instead of dtor). Propagate this attribute at inline pass
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/Statistic.h"
@@ -118,6 +120,9 @@ bool isCtorEliminationSafe(const Instruction& Ctor,
                            const Instruction& ObjUse,
                            const DtorVector& SubObjDtors) {
   if (isPotentiallyReachable(&Ctor, &ObjUse)) {
+    if (SubObjDtors.empty())
+      return false;
+
     for (const auto* Dtor : SubObjDtors) {
       assert(isPotentiallyReachable(&Ctor, Dtor) &&
              "dtor is not reached by copy/move ctor");
@@ -249,6 +254,10 @@ private:
     if (!AllocTo || !AllocFrom)
       return false;
 
+    // TODO: consider this case in future
+    if (isValueSubObjectOf(*AllocFrom, *AllocTo))
+      return false;
+
     LLVM_DEBUG(dbgs() << "*** Ctor *** : " << Ctor
                       << "\n*** AllocTo *** : " << *AllocTo
                       << "\n*** AllocaFrom *** : " << *AllocFrom
@@ -289,8 +298,12 @@ private:
 
     To = cast<Instruction>(AllocTo);
     if (isValueSubObjectOf(*AllocTo, *AllocFrom)) {
+      LLVM_DEBUG(dbgs() << "*** AllocTo is sub-object of AllocFrom ***\n");
       From = cast<Instruction>(ImmFrom);
     } else {
+      assert((AllocFrom->getAllocationSizeInBits(*DL) ==
+              AllocTo->getAllocationSizeInBits(*DL)) &&
+             "Size of types is different");
       From = AllocFrom;
     }
 
