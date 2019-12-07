@@ -498,11 +498,11 @@ class CGFunctionInfo final
   /// Whether this is a chain call.
   unsigned ChainCall : 1;
 
-  /// Whether this function is noreturn.
-  unsigned NoReturn : 1;
-
   /// Function is c++ copy/move constructor or destructor.
   unsigned CxxCMCtorOrDtor : 1;
+
+  /// Whether this function is noreturn.
+  unsigned NoReturn : 1;
 
   /// Whether this function is returns-retained.
   unsigned ReturnsRetained : 1;
@@ -593,9 +593,9 @@ public:
 
   bool isChainCall() const { return ChainCall; }
 
-  bool isNoReturn() const { return NoReturn; }
-
   bool isCxxCMCtorOrDtor() const { return CxxCMCtorOrDtor; }
+
+  bool isNoReturn() const { return NoReturn; }
 
   /// In ARC, whether this function retains its return value.  This
   /// is not always reliable for call sites.
@@ -667,8 +667,8 @@ public:
     ID.AddInteger(getASTCallingConvention());
     ID.AddBoolean(InstanceMethod);
     ID.AddBoolean(ChainCall);
-    ID.AddBoolean(NoReturn);
     ID.AddBoolean(CxxCMCtorOrDtor);
+    ID.AddBoolean(NoReturn);
     ID.AddBoolean(ReturnsRetained);
     ID.AddBoolean(NoCallerSavedRegs);
     ID.AddBoolean(HasRegParm);
@@ -687,6 +687,7 @@ public:
   static void Profile(llvm::FoldingSetNodeID &ID,
                       bool InstanceMethod,
                       bool ChainCall,
+                      bool isCxxCMCtorOrDtor,
                       const FunctionType::ExtInfo &info,
                       ArrayRef<ExtParameterInfo> paramInfos,
                       RequiredArgs required,
@@ -695,6 +696,7 @@ public:
     ID.AddInteger(info.getCC());
     ID.AddBoolean(InstanceMethod);
     ID.AddBoolean(ChainCall);
+    ID.AddBoolean(isCxxCMCtorOrDtor);
     ID.AddBoolean(info.getNoReturn());
     ID.AddBoolean(info.getProducesResult());
     ID.AddBoolean(info.getNoCallerSavedRegs());

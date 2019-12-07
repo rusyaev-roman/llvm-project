@@ -69,13 +69,10 @@ bool isCxxDtor(const Value& V) {
 //  return isCxxCMCtor(CB) || isCxxDtor(CB);
 //}
 
-bool isTrivialInstruction(const Instruction &I) {
+bool isLifeTimeInstruction(const Instruction &I) {
   if (auto *II = dyn_cast<IntrinsicInst>(&I))
     if (II->isLifetimeStartOrEnd())
       return true;
-
-  if (isCxxDtor(I))
-    return true;
 
   if (isa<GetElementPtrInst>(&I) && onlyUsedByLifetimeMarkers(&I))
     return true;
@@ -202,9 +199,6 @@ public:
 
     CV.collectCtors();
 
-    LLVM_DEBUG(dbgs() << "===================================="
-                      << "\n*** Function*** : " << F.getName() << "\n");
-
     bool Changed = false;
     for (auto &Call : CtorVec) {
       if (canCtorBeElided(*Call)) {
@@ -234,9 +228,9 @@ public:
     }
 
     if (Changed)
-      removeUnreachableBlocks(F);
-
-    LLVM_DEBUG(dbgs() << "====================================\n");
+      LLVM_DEBUG(dbgs() << "====================================\n"
+                        << "*** Function was *** : " << F.getName()
+                        << "\n====================================\n\n");
 
     return Changed;
   }
@@ -278,8 +272,8 @@ private:
       if (I == &Ctor)
         continue;
 
-      // remove all trivial instructions later
-      if (isTrivialInstruction(*I)) {
+      // remove all lifetime instructions later
+      if (isCxxDtor(*I) || isLifeTimeInstruction(*I)) {
         if (isa<GetElementPtrInst>(I) && isa<GetElementPtrInst>(ImmFrom)
             && !areGEPsEqual(cast<GetElementPtrInst>(*I),
                              cast<GetElementPtrInst>(*ImmFrom)))
@@ -296,7 +290,7 @@ private:
         return false;
     }
 
-    To = cast<Instruction>(AllocTo);
+    To = AllocTo;
     if (isValueSubObjectOf(*AllocTo, *AllocFrom)) {
       LLVM_DEBUG(dbgs() << "*** AllocTo is sub-object of AllocFrom ***\n");
       From = cast<Instruction>(ImmFrom);
@@ -311,6 +305,11 @@ private:
     if (!ImmDtors.empty())
       DeadInstList.insert(DeadInstList.end(), ImmDtors.begin(),
                           ImmDtors.end());
+
+    // We need to remove all lifetime instructions of value because
+    // lifetime of value can be increased after replacement
+    addLifeTimeUsersToDeadList(*To);
+
 #ifndef NDEBUG
     for (const auto* DI : DeadInstList)
       LLVM_DEBUG(dbgs() << "*** Dead Inst *** : " << *DI << "\n");
@@ -348,6 +347,20 @@ private:
     assert((VSize.hasValue() && ObjSize.hasValue()) && "Types must be sized");
 
     return VSize.getValue() < ObjSize.getValue();
+  }
+
+  void addLifeTimeUsersToDeadList(Instruction& I) {
+    for (auto *U : I.users()) {
+      auto *IU = dyn_cast<Instruction>(U);
+      if (!IU)
+        continue;
+
+      if (isLifeTimeInstruction(*IU)) {
+        DeadInstList.push_back(IU);
+        for (auto *UU : IU->users())
+          DeadInstList.push_back(cast<Instruction>(UU));
+      }
+    }
   }
 
   const DataLayout* DL = nullptr;

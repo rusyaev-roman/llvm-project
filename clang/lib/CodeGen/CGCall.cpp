@@ -613,7 +613,7 @@ arrangeFreeFunctionLikeCall(CodeGenTypes &CGT,
     argTypes.push_back(CGT.getContext().getCanonicalParamType(arg.Ty));
   return CGT.arrangeLLVMFunctionInfo(GetReturnType(fnType->getReturnType()),
                                      /*instanceMethod=*/false,
-                                     /*isCxxCMCtorOrDtor=*/false, chainCall,
+                                     chainCall, /*isCxxCMCtorOrDtor=*/false,
                                      argTypes, fnType->getExtInfo(), paramInfos,
                                      required);
 }
@@ -768,8 +768,8 @@ CodeGenTypes::arrangeLLVMFunctionInfo(CanQualType resultType,
 
   // Lookup or create unique function info.
   llvm::FoldingSetNodeID ID;
-  CGFunctionInfo::Profile(ID, instanceMethod, chainCall, info, paramInfos,
-                          required, resultType, argTypes);
+  CGFunctionInfo::Profile(ID, instanceMethod, chainCall, isCxxCMCtorOrDtor,
+                          info, paramInfos, required, resultType, argTypes);
 
   void *insertPos = nullptr;
   CGFunctionInfo *FI = FunctionInfos.FindNodeOrInsertPos(ID, insertPos);
