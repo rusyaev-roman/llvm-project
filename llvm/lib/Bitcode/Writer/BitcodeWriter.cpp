@@ -667,8 +667,6 @@ static uint64_t getAttrKindEncoding(Attribute::AttrKind Kind) {
     return bitc::ATTR_KIND_NOCF_CHECK;
   case Attribute::NoUnwind:
     return bitc::ATTR_KIND_NO_UNWIND;
-  case Attribute::CxxCMCtorOrDtor:
-    return bitc::ATTR_KIND_CXX_CMCTOR_OR_DTOR;
   case Attribute::OptForFuzzing:
     return bitc::ATTR_KIND_OPT_FOR_FUZZING;
   case Attribute::OptimizeForSize:

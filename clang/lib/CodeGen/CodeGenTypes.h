@@ -266,11 +266,11 @@ public:
   const CGFunctionInfo &arrangeLLVMFunctionInfo(CanQualType returnType,
                                                 bool instanceMethod,
                                                 bool chainCall,
-                                                bool isCxxCMCtorOrDtor,
                                                 ArrayRef<CanQualType> argTypes,
                                                 FunctionType::ExtInfo info,
                     ArrayRef<FunctionProtoType::ExtParameterInfo> paramInfos,
-                                                RequiredArgs args);
+                                                RequiredArgs args,
+                    CXXCallType type = CXXCallType::None);
 
   /// Compute a new LLVM record layout object for the given record.
   std::unique_ptr<CGRecordLayout> ComputeRecordLayout(const RecordDecl *D,

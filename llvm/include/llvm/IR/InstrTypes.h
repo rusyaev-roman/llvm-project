@@ -1709,14 +1709,6 @@ public:
     addAttribute(AttributeList::FunctionIndex, Attribute::NoUnwind);
   }
 
-  /// Determine if calls c++ copy/move constructor or destructor
-  bool isCxxCMCtorOrDtor() const {
-    return hasFnAttr(Attribute::CxxCMCtorOrDtor);
-  }
-  void setIsCxxCMCtorOrDtor() {
-    addAttribute(AttributeList::FunctionIndex, Attribute::CxxCMCtorOrDtor);
-  }
-
   /// Determine if the invoke cannot be duplicated.
   bool cannotDuplicate() const { return hasFnAttr(Attribute::NoDuplicate); }
   void setCannotDuplicate() {

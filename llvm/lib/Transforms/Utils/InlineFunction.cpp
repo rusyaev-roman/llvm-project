@@ -808,6 +808,21 @@ static void PropagateParallelLoopAccessMetadata(CallBase &CB,
   }
 }
 
+static void PropagateCXXCleanupMetadata(CallSite CS,
+                                        ValueToValueMapTy &VMap) {
+  auto *M = CS.getInstruction()->getMetadata(LLVMContext::MD_cxx_cleanup);
+  if (!M)
+    return;
+
+  for (auto const &Entry : VMap) {
+    auto *NI = dyn_cast_or_null<Instruction>(Entry.second);
+    if (!NI)
+      continue;
+
+    NI->setMetadata(LLVMContext::MD_cxx_cleanup, M);
+  }
+}
+
 /// When inlining a function that contains noalias scope metadata,
 /// this metadata needs to be cloned so that the inlined blocks
 /// have different "unique scopes" at every call site. Were this not done, then
@@ -1899,6 +1914,9 @@ llvm::InlineResult llvm::InlineFunction(CallBase &CB, InlineFunctionInfo &IFI,
 
     // Propagate llvm.mem.parallel_loop_access if necessary.
     PropagateParallelLoopAccessMetadata(CB, VMap);
+
+    // Propagate cxx.cleanup metadata.
+    PropagateCXXCleanupMetadata(CS, VMap);
 
     // Register any cloned assumptions.
     if (IFI.GetAssumptionCache)

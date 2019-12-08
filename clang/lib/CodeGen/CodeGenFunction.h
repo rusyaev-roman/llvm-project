@@ -4549,6 +4549,8 @@ private:
 
   void AddObjCARCExceptionMetadata(llvm::Instruction *Inst);
 
+  void AddCxxFuncCallMetadata(llvm::Instruction *Inst, unsigned KindID);
+
   llvm::Value *GetValueForARMHint(unsigned BuiltinID);
   llvm::Value *EmitX86CpuIs(const CallExpr *E);
   llvm::Value *EmitX86CpuIs(StringRef CPUStr);

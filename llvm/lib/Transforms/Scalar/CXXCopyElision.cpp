@@ -33,7 +33,7 @@ using namespace llvm;
 #define DEBUG_TYPE "cxx_copy_elision"
 
 STATISTIC(NumErasedCMCtors, "Number of erased copy/move constructors");
-STATISTIC(NumErasedDtors, "Number of erased destructors");
+STATISTIC(NumErasedCleanup, "Number of erased cleanups");
 STATISTIC(NumErasedIns, "Number of all erased unnecessary instructions");
 
 namespace {
@@ -43,31 +43,32 @@ class CXXCopyElisionLegacyPass;
 using CtorVector = SmallVector<CallBase *, 32>;
 using DtorVector = SmallVector<Instruction*, 2>;
 
+
+void makeUnreachable(Instruction& I) {
+  assert(I.isTerminator() && "must be terminator");
+  BasicBlock *BB = I.getParent();
+
+  for (auto *Succ : successors(BB))
+    Succ->removePredecessor(BB);
+
+  changeToUnreachable(&I, false);
+}
+
 bool isCxxCMCtor(const CallBase& CB) {
-  return CB.isCxxCMCtorOrDtor() && (CB.getNumArgOperands() == 2);
-}
+  if (CB.getMetadata(LLVMContext::MD_cxx_cm_ctor))
+    if (CB.getNumArgOperands() == 2)
+      return true;
 
-bool isCxxDtor(const CallBase& CB) {
-  return CB.isCxxCMCtorOrDtor() && (CB.getNumArgOperands() == 1);
-}
-
-bool isCxxDtor(const Instruction& I) {
-  if (auto* CB = dyn_cast<CallBase>(&I)) {
-    return isCxxDtor(*CB);
-  }
   return false;
 }
 
-bool isCxxDtor(const Value& V) {
-  if (auto* I = dyn_cast<Instruction>(&V)) {
-    return isCxxDtor(*I);
-  }
+bool isCxxCleanup(const Value& V) {
+  if (auto* I = dyn_cast<Instruction>(&V))
+    if (I->getMetadata(LLVMContext::MD_cxx_cleanup))
+      return true;
+
   return false;
 }
-
-//bool isCxxCMCtorOrDtor(const CallBase& CB) {
-//  return isCxxCMCtor(CB) || isCxxDtor(CB);
-//}
 
 bool isLifeTimeInstruction(const Instruction &I) {
   if (auto *II = dyn_cast<IntrinsicInst>(&I))
@@ -83,34 +84,49 @@ bool isLifeTimeInstruction(const Instruction &I) {
   return false;
 }
 
-DtorVector findImmediateCopiedDtors(Instruction& I) {
+DtorVector findImmediateDtors(Instruction &I) {
   DtorVector Dtors;
 
-  for (auto* IU : I.users()) {
-    auto* DI = dyn_cast<Instruction>(IU);
+  for (auto *U : I.users()) {
+    auto *UI = dyn_cast<Instruction>(U);
 
-    if (!DI)
+    if (!UI)
       continue;
 
-    if (isCxxDtor(*DI)) {
-      Dtors.push_back(DI);
-    } else if (auto *II = dyn_cast<IntrinsicInst>(&I)) {
-      if (II->getIntrinsicID() == Intrinsic::lifetime_end)
-        Dtors.push_back(DI);
-    } else if ((isa<BitCastInst>(DI) || isa<GetElementPtrInst>(DI))
-               && DI->hasOneUse()) {
-      auto U = DI->users().begin();
-      if (auto* UII = dyn_cast<IntrinsicInst>(*U)) {
-        if (UII->getIntrinsicID() == Intrinsic::lifetime_end)
-          Dtors.push_back(DI);
-      } else if (auto* UI = dyn_cast<Instruction>(*U)) {
-        if (isCxxDtor(*UI))
-          Dtors.push_back(DI);
+    if (isCxxCleanup(*UI)) {
+      Dtors.push_back(UI);
+    } else if (auto *UII = dyn_cast<IntrinsicInst>(UI)) {
+      if (UII->getIntrinsicID() == Intrinsic::lifetime_end)
+        Dtors.push_back(UI);
+    } else if ((isa<BitCastInst>(UI) || isa<GetElementPtrInst>(UI))
+               && UI->hasOneUse()) {
+      Value *UU = *UI->user_begin();
+      if (auto* UUI = dyn_cast<IntrinsicInst>(UU)) {
+        if (UUI->getIntrinsicID() == Intrinsic::lifetime_end)
+          Dtors.push_back(UI);
+      } else if (isCxxCleanup(*UU)) {
+          Dtors.push_back(UI);
       }
     }
   }
 
   return Dtors;
+}
+
+bool isInstrCxxCleanupOrItsUsersAre(const Instruction& I) {
+  if (isCxxCleanup(I))
+    return true;
+
+  if (!I.getNumUses())
+    // Instruction is not cleanup and has no users
+    return false;
+
+  for (const auto* U : I.users())
+    if (!isCxxCleanup(*U))
+      // At least one user is not cxx cleanup
+      return false;
+
+  return true;
 }
 
 bool isCtorEliminationSafe(const Instruction& Ctor,
@@ -126,7 +142,7 @@ bool isCtorEliminationSafe(const Instruction& Ctor,
 
       // check that this instruction is not sub-object destructor
       auto *GEP = dyn_cast<GetElementPtrInst>(&ObjUse);
-      if (GEP && GEP->hasOneUse() && isCxxDtor(*(*GEP->users().begin())))
+      if (GEP && GEP->hasOneUse() && isCxxCleanup(*(*GEP->users().begin())))
         continue;
 
       if (!isPotentiallyReachable(Dtor, &ObjUse))
@@ -155,6 +171,22 @@ bool areGEPsEqual(const GetElementPtrInst& GEP1,
   }
 
   return true;
+}
+
+void collectCxxCleanups(Instruction *I,
+                        SmallPtrSet<Instruction*, 4>& Visited,
+                        SmallVector<Instruction*, 32>& Result) {
+  if (!Visited.insert(I).second)
+    return;
+
+  for (auto *U : I->users())
+    if (auto *UI = dyn_cast<Instruction>(U))
+      collectCxxCleanups(UI, Visited, Result);
+
+  if (isInstrCxxCleanupOrItsUsersAre(*I)) {
+    LLVM_DEBUG(dbgs() << "*** CXX Cleanup *** : " << *I << "\n");
+    Result.push_back(I);
+  }
 }
 
 class CtorVisitor : public InstVisitor<CtorVisitor> {
@@ -208,9 +240,10 @@ public:
         while (!DeadInstList.empty()) {
           auto *EI = DeadInstList.pop_back_val();
 
-          NumErasedIns++;
-          if (isCxxDtor(*EI))
-            NumErasedDtors++;
+          if (isCxxCleanup(*EI))
+            NumErasedCleanup++;
+          else
+            NumErasedIns++;
 
           LLVM_DEBUG(dbgs() << "*** Erase Inst *** : " << *EI << "\n");
           assert(!EI->getNumUses() && "Erased instruction has uses");
@@ -218,19 +251,23 @@ public:
           if (auto* EII = dyn_cast<InvokeInst>(EI))
             EI = changeToCall(EII);
 
-          EI->eraseFromParent();
+          if (EI->isTerminator())
+            makeUnreachable(*EI);
+          else
+            EI->eraseFromParent();
         }
 
         replaceCopiedObject();
-
         Changed = true;
       }
     }
 
-    if (Changed)
+    if (Changed) {
+      removeUnreachableBlocks(F);
       LLVM_DEBUG(dbgs() << "====================================\n"
                         << "*** Function was *** : " << F.getName()
                         << "\n====================================\n\n");
+    }
 
     return Changed;
   }
@@ -254,40 +291,19 @@ private:
 
     LLVM_DEBUG(dbgs() << "*** Ctor *** : " << Ctor
                       << "\n*** AllocTo *** : " << *AllocTo
-                      << "\n*** AllocaFrom *** : " << *AllocFrom
+                      << "\n*** AllocFrom *** : " << *AllocFrom
                       << "\n*** ImmFrom *** : " << *ImmFrom << "\n");
+
+    auto *ImmFromIns = cast<Instruction>(ImmFrom);
 
     DtorVector ImmDtors;
     if (ImmFrom != AllocFrom)
-      ImmDtors = findImmediateCopiedDtors(cast<Instruction>(*ImmFrom));
+      ImmDtors = findImmediateDtors(*ImmFromIns);
 
-    SmallVector<Instruction *, 32> InstList;
-    for (auto* U : AllocFrom->users()) {
-      auto *I = dyn_cast<Instruction>(U);
-      LLVM_DEBUG(dbgs() << "*** User *** : " << *U << "\n");
-
-      if (!I)
-        return false;
-
-      if (I == &Ctor)
-        continue;
-
-      // remove all lifetime instructions later
-      if (isCxxDtor(*I) || isLifeTimeInstruction(*I)) {
-        if (isa<GetElementPtrInst>(I) && isa<GetElementPtrInst>(ImmFrom)
-            && !areGEPsEqual(cast<GetElementPtrInst>(*I),
-                             cast<GetElementPtrInst>(*ImmFrom)))
-          // erase lifetime markers only for current sub-object
-          continue;
-
-        InstList.push_back(I);
-        for (auto* UI : I->users())
-          InstList.push_back(cast<Instruction>(UI));
-        continue;
-      }
-
-      if (!isCtorEliminationSafe(Ctor, *I, ImmDtors))
-        return false;
+    if (!processUsersOfCopiedObject(Ctor, *AllocTo, *AllocFrom,
+                                    *ImmFromIns, ImmDtors)) {
+      DeadInstList.clear();
+      return false;
     }
 
     To = AllocTo;
@@ -301,19 +317,57 @@ private:
       From = AllocFrom;
     }
 
-    DeadInstList = std::move(InstList);
     if (!ImmDtors.empty())
-      DeadInstList.insert(DeadInstList.end(), ImmDtors.begin(),
-                          ImmDtors.end());
+      DeadInstList.append(ImmDtors.begin(), ImmDtors.end());
 
     // We need to remove all lifetime instructions of value because
     // lifetime of value can be increased after replacement
-    addLifeTimeUsersToDeadList(*To);
+    addLifeTimesToDeadList(*To);
 
 #ifndef NDEBUG
-    for (const auto* DI : DeadInstList)
+    for (const auto* DI : DeadInstList) {
       LLVM_DEBUG(dbgs() << "*** Dead Inst *** : " << *DI << "\n");
+    }
 #endif
+
+    return true;
+  }
+
+  bool processUsersOfCopiedObject(const CallBase &Ctor,
+                                  const AllocaInst &AllocTo,
+                                  AllocaInst &AllocFrom,
+                                  const Instruction& ImmFrom,
+                                  const DtorVector &ImmDtors) {
+    // collect all cleanup instructions
+    collectCxxCleanupsToDeadList(AllocFrom);
+
+    for (auto *U : AllocFrom.users()) {
+      auto *I = dyn_cast<Instruction>(U);
+      if (!I)
+        return false;
+
+      if (I == &Ctor)
+        continue;
+
+      LLVM_DEBUG(dbgs() << "*** User *** : " << *U << "\n");
+
+      if (isInstrCxxCleanupOrItsUsersAre(*I))
+        continue;
+
+      if (isLifeTimeInstruction(*I) &&
+          isa<GetElementPtrInst>(I) && isa<GetElementPtrInst>(ImmFrom) &&
+          !areGEPsEqual(cast<GetElementPtrInst>(*I),
+                        cast<GetElementPtrInst>(ImmFrom)))
+        // erase lifetime markers only for current sub-object
+        continue;
+
+      // collect all lifetime instructions
+      if (addLifeTimesToDeadList(*I))
+        continue;
+
+      if (!isCtorEliminationSafe(Ctor, *I, ImmDtors))
+        return false;
+    }
 
     return true;
   }
@@ -349,18 +403,39 @@ private:
     return VSize.getValue() < ObjSize.getValue();
   }
 
-  void addLifeTimeUsersToDeadList(Instruction& I) {
+  bool addLifeTimesToDeadList(Instruction& I) {
+    bool IsAdded = false;
+
+    if (isLifeTimeInstruction(I)) {
+      DeadInstList.push_back(&I);
+      IsAdded = true;
+    }
+
     for (auto *U : I.users()) {
-      auto *IU = dyn_cast<Instruction>(U);
-      if (!IU)
+      auto *UI = dyn_cast<Instruction>(U);
+      if (!UI)
         continue;
 
-      if (isLifeTimeInstruction(*IU)) {
-        DeadInstList.push_back(IU);
-        for (auto *UU : IU->users())
+      if (isLifeTimeInstruction(*UI)) {
+        IsAdded = true;
+        DeadInstList.push_back(UI);
+        for (auto *UU : UI->users())
           DeadInstList.push_back(cast<Instruction>(UU));
       }
     }
+
+    return IsAdded;
+  }
+
+  void collectCxxCleanupsToDeadList(Instruction &I) {
+    SmallPtrSet<Instruction*, 4> Visited;
+    SmallVector<Instruction*, 32> WorkList;
+
+    I.setMetadata(LLVMContext::MD_cxx_cleanup, nullptr);
+    collectCxxCleanups(&I, Visited, WorkList);
+
+    while (!WorkList.empty())
+      DeadInstList.push_back(WorkList.pop_back_val());
   }
 
   const DataLayout* DL = nullptr;
