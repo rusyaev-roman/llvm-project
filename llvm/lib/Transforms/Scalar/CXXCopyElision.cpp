@@ -320,8 +320,11 @@ public:
 
 private:
   bool canCtorBeElided(CallBase &Ctor) {
-    auto *ObjTo = GetUnderlyingObject(Ctor.getOperand(0), *DL);
-    auto *ObjFrom = GetUnderlyingObject(Ctor.getOperand(1), *DL);
+    auto *OpndTo = Ctor.getOperand(0);
+    auto *OpndFrom = Ctor.getOperand(1);
+
+    auto *ObjTo = GetUnderlyingObject(OpndTo, *DL);
+    auto *ObjFrom = GetUnderlyingObject(OpndFrom, *DL);
 
     auto* AllocFrom = dyn_cast<AllocaInst>(ObjFrom);
     auto* AllocTo = dyn_cast<AllocaInst>(ObjTo);
@@ -335,6 +338,11 @@ private:
         isValueSubObjectOf(*AllocTo, *AllocFrom))
       return false;
 
+    if (!isSizeOfTypesEqual(OpndTo->getType(), AllocTo->getType()))
+      return false;
+
+    assert(isSizeOfTypesEqual(OpndFrom->getType(), AllocFrom->getType()) &&
+           "To and From sizes must be the same");
     LLVM_DEBUG(dbgs() << "\n------------------------------------\n"
                       << "*** Function *** : " << Ctor.getFunction()->getName()
                       << "\n*** Ctor *** : " << Ctor
@@ -461,6 +469,18 @@ private:
     return VSize.getValue() < ObjSize.getValue();
   }
 
+  bool isSizeOfTypesEqual(const Type *TyL, const Type *TyR) const {
+    auto *PTyL = dyn_cast<PointerType>(TyL);
+    auto *PTyR = dyn_cast<PointerType>(TyR);
+    if (!PTyL || !PTyR)
+      return false;
+
+    auto *ETyL = PTyL->getElementType();
+    auto *ETyR = PTyR->getElementType();
+
+    return (DL->getTypeAllocSize(ETyL) == DL->getTypeAllocSize(ETyR));
+  }
+
   void collectInstructionsToErase(Instruction &I) {
     SmallPtrSet<Instruction*, 16> Visited;
 
@@ -489,9 +509,13 @@ private:
 
   bool areUsersOfDestObjectBeforeCtor(const CallBase &Ctor,
                                       const Instruction &Dest) {
+    auto *DestOpnd = Ctor.getOperand(0);
     for (auto *U : Dest.users()) {
       if (auto *UI = dyn_cast<Instruction>(U)) {
-        if ((UI == &Ctor) || isInstrLifeTimeOrItsUsersAre(*UI))
+        if ((UI == &Ctor) || (UI == DestOpnd))
+          continue;
+
+        if (isInstrLifeTimeOrItsUsersAre(*UI))
           continue;
 
         //DT->dominates(&Ctor, UI)
