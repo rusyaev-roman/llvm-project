@@ -808,9 +808,9 @@ static void PropagateParallelLoopAccessMetadata(CallBase &CB,
   }
 }
 
-static void PropagateCXXCleanupMetadata(CallSite CS,
+static void PropagateCXXCleanupMetadata(CallBase &CB,
                                         ValueToValueMapTy &VMap) {
-  auto *M = CS.getInstruction()->getMetadata(LLVMContext::MD_cxx_cleanup);
+  auto *M = CB.getMetadata(LLVMContext::MD_cxx_cleanup);
   if (!M)
     return;
 
@@ -1916,7 +1916,7 @@ llvm::InlineResult llvm::InlineFunction(CallBase &CB, InlineFunctionInfo &IFI,
     PropagateParallelLoopAccessMetadata(CB, VMap);
 
     // Propagate cxx.cleanup metadata.
-    PropagateCXXCleanupMetadata(CS, VMap);
+    PropagateCXXCleanupMetadata(CB, VMap);
 
     // Register any cloned assumptions.
     if (IFI.GetAssumptionCache)

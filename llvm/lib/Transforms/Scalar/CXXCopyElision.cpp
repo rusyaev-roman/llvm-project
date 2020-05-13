@@ -446,9 +446,15 @@ private:
                       << "\n*** With (To) *** : " << *To << "\n");
 
     if (FromType != ToType) {
+      // Insert after all Alloca instructions
+      auto *InsertBefore = To->getNextNode();
+      while (isa<AllocaInst>(InsertBefore)) {
+        InsertBefore = InsertBefore->getNextNode();
+      }
+
       To = CastInst::CreateBitOrPointerCast(
           To, FromType, "cxx.elision.cast",
-          To->getNextNode());
+          InsertBefore);
 
       LLVM_DEBUG(dbgs() << "*** FromType *** : " << *FromType
                         << "\n*** ToType *** : " << *ToType

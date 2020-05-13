@@ -1890,9 +1890,6 @@ void CodeGenModule::ConstructAttributeList(
   if (FI.isNoReturn())
     FuncAttrs.addAttribute(llvm::Attribute::NoReturn);
 
-  if (FI.isCxxCMCtorOrDtor())
-    FuncAttrs.addAttribute(llvm::Attribute::CxxCMCtorOrDtor);
-
   if (FI.isCmseNSCall())
     FuncAttrs.addAttribute("cmse_nonsecure_call");
 
