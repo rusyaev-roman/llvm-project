@@ -6,12 +6,19 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// TODO
-// 1. Add description of pass
-// 2. Use DOM tree for speedup?
-// 3. Don't apply for volatile objects
-// 4. Add comments and make code cleanup
-// 5. Don't remove lifetime intrinsics. Need to select the biggest lifetime
+// This file implements the Ultimate Copy Elision proposal in C++ language
+// See http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p0889r1.html
+//
+// The main idea is to remove unnecessary copy/move constructors if source
+// object has no any uses except for call constructor. In this case we replace
+// all uses of source object with destination one and remove it.
+//
+// TODO:
+// 1. Don't apply for volatile objects
+// 2. Add comments and make code cleanup
+// 3. Don't remove lifetime intrinsics. Need to select the biggest
+//    lifetime or something else
+// 4. Add pass class for new pass manager
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/Statistic.h"
@@ -41,6 +48,7 @@ STATISTIC(NumErasedCleanup, "Number of erased cxx cleanups");
 STATISTIC(NumErasedLpads, "Number of erased landing pads");
 STATISTIC(NumErasedOtherIns, "Number of erased unnecessary instructions");
 
+// debugging option to select limit for removing copy/move constructors
 static cl::opt<int> ClCxxCopyElisionLimit(
     "cxx-copy-elision-limit", cl::init(-1),
     cl::desc("limit per translation unit for ultimate copy elision applying"),
@@ -52,16 +60,26 @@ namespace {
 class CXXCopyElisionLegacyPass;
 
 using CtorVector = SmallVector<CallBase *, 32>;
-using DtorVector = SmallVector<Instruction*, 2>;
+using DtorVector = SmallVector<Instruction *, 2>;
 
-auto makeUnconditionalBranch(Instruction *I) {
-  assert(I->isTerminator() && "must be terminator");
-  auto *BB = I->getParent();
+bool isApplyingLimitReached() {
+  if (ClCxxCopyElisionLimit > -1) {
+    if (CxxCopyElisionCnt >= ClCxxCopyElisionLimit)
+      // applying limit was reached
+      return true;
+    ++CxxCopyElisionCnt;
+  }
+
+  return false;
+}
+
+// create unconditional branch instruction before terminator
+auto makeUnconditionalBranch(Instruction *Term) {
+  assert(Term->isTerminator() && "must be terminator");
+  auto *BB = Term->getParent();
   auto *Target = *successors(BB).begin();
 
   SmallVector<DominatorTree::UpdateType, 4> Updates;
-  //(unsigned i = 0, e = I->getNumSuccessors(); i != e; ++i)
-  //BasicBlock *Succ = I->getSuccessor(i);
   for (auto *Succ : successors(BB)) {
     if (Target == Succ)
       continue;
@@ -69,21 +87,22 @@ auto makeUnconditionalBranch(Instruction *I) {
     Updates.push_back({DominatorTree::Delete, BB, Succ});
   }
 
-  BranchInst::Create(Target, I);
+  BranchInst::Create(Target, Term);
 
   return Updates;
 }
 
-bool isCxxCMCtor(const CallBase& CB) {
+bool isCxxCMCtor(const CallBase &CB) {
   if (CB.getMetadata(LLVMContext::MD_cxx_cm_ctor))
+    // FIXME: don't rely on src argument number
     if (CB.getNumArgOperands() == 2)
       return true;
 
   return false;
 }
 
-bool isCxxCleanup(const Value& V) {
-  if (auto* I = dyn_cast<Instruction>(&V))
+bool isCxxCleanup(const Value &V) {
+  if (const auto *I = dyn_cast<Instruction>(&V))
     if (I->getMetadata(LLVMContext::MD_cxx_cleanup))
       return true;
 
@@ -91,7 +110,7 @@ bool isCxxCleanup(const Value& V) {
 }
 
 bool isLifeTimeInstruction(const Instruction &I) {
-  if (auto *II = dyn_cast<IntrinsicInst>(&I))
+  if (const auto *II = dyn_cast<IntrinsicInst>(&I))
     if (II->isLifetimeStartOrEnd())
       return true;
 
@@ -104,36 +123,7 @@ bool isLifeTimeInstruction(const Instruction &I) {
   return false;
 }
 
-//DtorVector findImmediateDtors(Instruction &I) {
-//  DtorVector Dtors;
-//
-//  for (auto *U : I.users()) {
-//    auto *UI = dyn_cast<Instruction>(U);
-//
-//    if (!UI)
-//      continue;
-//
-//    if (isCxxCleanup(*UI)) {
-//      Dtors.push_back(UI);
-//    } else if (auto *UII = dyn_cast<IntrinsicInst>(UI)) {
-//      if (UII->getIntrinsicID() == Intrinsic::lifetime_end)
-//        Dtors.push_back(UI);
-//    } else if ((isa<BitCastInst>(UI) || isa<GetElementPtrInst>(UI))
-//               && UI->hasOneUse()) {
-//      Value *UU = *UI->user_begin();
-//      if (auto* UUI = dyn_cast<IntrinsicInst>(UU)) {
-//        if (UUI->getIntrinsicID() == Intrinsic::lifetime_end)
-//          Dtors.push_back(UI);
-//      } else if (isCxxCleanup(*UU)) {
-//          Dtors.push_back(UI);
-//      }
-//    }
-//  }
-//
-//  return Dtors;
-//}
-
-bool isInstrCxxCleanupOrItsUsersAre(const Instruction& I) {
+bool isInstrCxxCleanupOrItsUsersAre(const Instruction &I) {
   if (isCxxCleanup(I))
     return true;
 
@@ -141,7 +131,7 @@ bool isInstrCxxCleanupOrItsUsersAre(const Instruction& I) {
     // Instruction is not cleanup and has no users
     return false;
 
-  for (const auto* U : I.users())
+  for (const auto *U : I.users())
     if (!isCxxCleanup(*U))
       // At least one user is not cxx cleanup
       return false;
@@ -149,32 +139,12 @@ bool isInstrCxxCleanupOrItsUsersAre(const Instruction& I) {
   return true;
 }
 
-//bool areGEPsEqual(const GetElementPtrInst& GEP1,
-//                  const GetElementPtrInst& GEP2) {
-//
-//  if (GEP1.getNumOperands() != GEP2.getNumOperands())
-//    return false;
-//
-//  for (unsigned i = 1, e = GEP1.getNumOperands(); i != e; ++i) {
-//    ConstantInt *CI1 = dyn_cast<ConstantInt>(GEP1.getOperand(i));
-//    ConstantInt *CI2 = dyn_cast<ConstantInt>(GEP2.getOperand(i));
-//
-//    if (!CI1 || !CI2)
-//      return false;
-//
-//    if (CI1->getValue() != CI2->getValue())
-//      return false;
-//  }
-//
-//  return true;
-//}
-
 bool isInstrLifeTimeOrItsUsersAre(const Instruction &I) {
   if (isLifeTimeInstruction(I))
     return true;
 
   if (!I.getNumUses())
-    // Instruction is not cleanup and has no users
+    // Instruction is not lifetime and has no users
     return false;
 
   for (const auto *U : I.users()) {
@@ -189,30 +159,10 @@ bool isInstrLifeTimeOrItsUsersAre(const Instruction &I) {
   return true;
 }
 
-//bool isInstructionEqualToSubObject(const Instruction *I,
-//                                   const Instruction *SubObj) {
-//
-//  auto *BI = dyn_cast<BitCastInst>(I);
-//  auto *BSub = dyn_cast<BitCastInst>(SubObj);
-//
-//  if (BI && BSub) {
-//    if ((BI->getSrcTy() == BSub->getSrcTy()) &&
-//        (BI->getDestTy() == BSub->getDestTy()))
-//      return true;
-//  }
-//
-//  auto *IGep = dyn_cast<GetElementPtrInst>(I);
-//  auto *SubGep = dyn_cast<GetElementPtrInst>(SubObj);
-//
-//  if (IGep && SubGep && areGEPsEqual(*IGep, *SubGep))
-//    return true;
-//
-//  return false;
-//}
-
+// copy/move constructors collector
 class CtorVisitor : public InstVisitor<CtorVisitor> {
 public:
-  explicit CtorVisitor(Function& F, CtorVector& CtorVec)
+  explicit CtorVisitor(Function &F, CtorVector &CtorVec)
       : F(F), CtorVec(CtorVec) {}
 
   void collectCtors() {
@@ -221,23 +171,23 @@ public:
     }
   }
 
-  void visitCallBase(CallBase& CB) {
+  void visitCallBase(CallBase &CB) {
     // collect all calls/invokes without uses
     if (isCxxCMCtor(CB))
       CtorVec.push_back(&CB);
   }
 
 private:
-  Function& F;
-  CtorVector& CtorVec;
+  Function &F;
+  CtorVector &CtorVec;
 };
 
 class CXXCopyElisionLegacyPass : public FunctionPass {
 public:
-  static char ID;
+  static char ID; // Pass identification, replacement for typeid
+
   CXXCopyElisionLegacyPass() : FunctionPass(ID) {
-    initializeCXXCopyElisionLegacyPassPass(
-        *PassRegistry::getPassRegistry());
+    initializeCXXCopyElisionLegacyPassPass(*PassRegistry::getPassRegistry());
   }
 
   bool runOnFunction(Function &F) override {
@@ -247,70 +197,12 @@ public:
     DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
     DL = &F.getParent()->getDataLayout();
 
-    DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Eager);
-
     CtorVector CtorVec;
     CtorVisitor CV(F, CtorVec);
 
     CV.collectCtors();
 
-    bool Changed = false;
-    for (auto &Call : CtorVec) {
-      CtorStateRAII CleanupObj(this);
-
-      if (canCtorBeElided(*Call)) {
-        if (ClCxxCopyElisionLimit > -1) {
-          if (CxxCopyElisionCnt >= ClCxxCopyElisionLimit)
-            return false;
-          ++CxxCopyElisionCnt;
-        }
-
-        LLVM_DEBUG(dbgs() << "*** Erase Ctor *** : " << *Call << "\n");
-        if (auto* Invoke = dyn_cast<InvokeInst>(Call)) {
-          NumErasedLpads++;
-          Call = changeToCall(Invoke, &DTU);
-        }
-        NumErasedCMCtors++;
-        Call->eraseFromParent();
-
-        for (auto* EI : DeadInstList) {
-          if (isCxxCleanup(*EI)) {
-            NumErasedCleanup++;
-            LLVM_DEBUG(dbgs() << "*** Erase Cleanup *** : " << *EI << "\n");
-          } else {
-            NumErasedOtherIns++;
-            LLVM_DEBUG(dbgs() << "*** Erase Inst *** : " << *EI << "\n");
-          }
-
-          assert(!EI->getNumUses() && "Erased instruction has uses");
-
-          if (auto* EII = dyn_cast<InvokeInst>(EI)) {
-            NumErasedLpads++;
-            EI = changeToCall(EII, &DTU);
-            EI->eraseFromParent();
-          } else if (EI->isTerminator()) {
-            auto Updates = makeUnconditionalBranch(EI);
-            EI->eraseFromParent();
-            DTU.applyUpdatesPermissive(Updates);
-          } else {
-            EI->eraseFromParent();
-          }
-        }
-
-        replaceCopiedObject();
-        Changed = true;
-      }
-    }
-
-    if (Changed) {
-      removeUnreachableBlocks(F, &DTU);
-#ifndef NDEBUG
-      assert(!verifyFunction(F, &errs()));
-      assert(DT->verify(DominatorTree::VerificationLevel::Fast));
-#endif
-    }
-
-    return Changed;
+    return performUltimateCopyElision(F, CtorVec);
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
@@ -319,246 +211,395 @@ public:
   }
 
 private:
-  bool canCtorBeElided(CallBase &Ctor) {
-    auto *OpndTo = Ctor.getOperand(0);
-    auto *OpndFrom = Ctor.getOperand(1);
+  /// do main work
+  bool performUltimateCopyElision(Function &F, CtorVector &Ctors);
 
-    auto *ObjTo = GetUnderlyingObject(OpndTo, *DL);
-    auto *ObjFrom = GetUnderlyingObject(OpndFrom, *DL);
+  /// whether copy/move constructor can be deleted or not
+  bool canCtorBeElided(CallBase &Ctor);
 
-    auto* AllocFrom = dyn_cast<AllocaInst>(ObjFrom);
-    auto* AllocTo = dyn_cast<AllocaInst>(ObjTo);
+  /// whether all users of Src object are before copy/move constructor
+  bool areAllUsersOfSrcAllocaBeforeCtor(const CallBase &Ctor,
+                                        const AllocaInst &SrcAlloc) const;
 
-    // consider only automatic variables
-    if (!AllocTo || !AllocFrom)
-      return false;
+  /// whether all users of Dst object are after copy/move constructor
+  bool areAllUsersOfDstAllocaAfterCtor(const CallBase &Ctor,
+                                       const AllocaInst &DestAlloc) const;
 
-    // TODO: consider this cases in future
-    if (isValueSubObjectOf(*AllocFrom, *AllocTo) ||
-        isValueSubObjectOf(*AllocTo, *AllocFrom))
-      return false;
+  void replaceSrcObjWithDstObj();
 
-    if (!isSizeOfTypesEqual(OpndTo->getType(), AllocTo->getType()))
-      return false;
+  void removeDeadInstructions(DomTreeUpdater& DTU);
 
-    assert(isSizeOfTypesEqual(OpndFrom->getType(), AllocFrom->getType()) &&
-           "To and From sizes must be the same");
-    LLVM_DEBUG(dbgs() << "\n------------------------------------\n"
-                      << "*** Function *** : " << Ctor.getFunction()->getName()
-                      << "\n*** Ctor *** : " << Ctor
-                      << "\n*** AllocTo *** : " << *AllocTo
-                      << "\n*** AllocFrom *** : " << *AllocFrom << "\n");
+  void collectInstructionsToErase(Instruction &I);
+  void collectInstructionsToErase(Instruction &I,
+                                  SmallPtrSet<Instruction *, 16> &Visited);
 
-    if (AllocTo == AllocFrom) {
-      // Such case can take place after applying this pass
-      // For example we have the following code:
-      //     %src = alloca %SomeType
-      //     %dst = alloca %SomeType
-      //     ...
-      //     some_cond1:
-      //       call @copy_ctor(%dst, %src)
-      //     ...
-      //     some_cond2:
-      //       call @copy_ctor(%dst, %src)
-      //     ...
-      // When this pass applies to the first call it will look like:
-      //     %dst = alloca %SomeType
-      //     ...
-      //     some_cond1:
-      //     ...
-      //     some_cond2:
-      //       call @copy_ctor(%dst, %dst) // It will be after RAUW
-      //     ...
-      // Therefore this situation is not correct
-      // and we must eliminate second the call
-      To = From = AllocTo;
-      return true;
-    }
+  bool areSizesOfTypesTheSame(const Type *TyL, const Type *TyR) const;
 
-    if (!areUsersOfDestObjectBeforeCtor(Ctor, *AllocTo))
-      return false;
+  /// Wrapper for operator<  overloading for convenient comparing sizes of
+  /// objects of Alloca instructions
+  struct AllocSize {
+    explicit AllocSize(const AllocaInst &AI, const DataLayout &DL)
+        : AI(AI), DL(DL) {}
 
-    if (!processUsersOfCopiedObject(Ctor, *AllocTo, *AllocFrom))
-      return false;
+    const AllocaInst &AI;
+    const DataLayout &DL;
+  };
 
-    To = AllocTo;
-    From = AllocFrom;
+  /// returns special object that holds information about alloca size.
+  /// To this object can be applied comparison operators (<,>,== etc)
+  /// for comparison of allocated objects sizes
+  auto sizeOf(const AllocaInst &AI) const { return AllocSize(AI, *DL); }
 
-    // We need to remove all lifetime instructions of value because
-    // lifetime of value can be increased after replacement
-    // TODO: for To we need to figure out the biggest lifetime of From and To
-    //       but don't just remove intrinsics
-    for (auto *U : To->users())
-      if (auto *UI = dyn_cast<Instruction>(U))
-        if (isLifeTimeInstruction(*UI)) {
-          for (auto *UU : UI->users())
-            DeadInstList.push_back(cast<Instruction>(UU));
-          DeadInstList.push_back(UI);
-        }
+  //friend bool operator<(AllocSize ASize1, AllocSize ASize2);
+  //friend bool operator>(AllocSize ASize1, AllocSize ASize2);
+  friend bool operator==(AllocSize ASize1, AllocSize ASize2);
+  friend bool operator!=(AllocSize ASize1, AllocSize ASize2);
 
-#ifndef NDEBUG
-    for (const auto* DI : DeadInstList) {
-      LLVM_DEBUG(dbgs() << "*** Dead Inst *** : " << *DI << "\n");
-    }
-#endif
-
-    return true;
-  }
-
-  bool processUsersOfCopiedObject(const CallBase &Ctor,
-                                  const AllocaInst &AllocTo,
-                                  AllocaInst &AllocFrom) {
-    // collect all cleanup and lifetime instructions that will be deleted
-    collectInstructionsToErase(AllocFrom);
-
-    for (auto *U : AllocFrom.users()) {
-      auto *I = dyn_cast<Instruction>(U);
-      if (!I)
-        return false;
-
-      if (I == &Ctor)
-        continue;
-
-      LLVM_DEBUG(dbgs() << "*** User *** : " << *I << "\n");
-
-      if (isInstrCxxCleanupOrItsUsersAre(*I) ||
-          isInstrLifeTimeOrItsUsersAre(*I))
-        continue;
-
-      if (DT->dominates(I, &Ctor))
-        continue;
-
-      if (isPotentiallyReachable(&Ctor, I, nullptr, DT))
-        return false;
-    }
-
-    return true;
-  }
-
-  void replaceCopiedObject() {
-    if (To == From)
-      return;
-
-    auto* FromType = From->getType();
-    auto* ToType = To->getType();
-
-    LLVM_DEBUG(dbgs() << "*** Replace Inst (From) *** : " << *From
-                      << "\n*** With (To) *** : " << *To << "\n");
-
-    if (FromType != ToType) {
-      // Insert after all Alloca instructions
-      auto *InsertBefore = To->getNextNode();
-      while (isa<AllocaInst>(InsertBefore)) {
-        InsertBefore = InsertBefore->getNextNode();
-      }
-
-      To = CastInst::CreateBitOrPointerCast(
-          To, FromType, "cxx.elision.cast",
-          InsertBefore);
-
-      LLVM_DEBUG(dbgs() << "*** FromType *** : " << *FromType
-                        << "\n*** ToType *** : " << *ToType
-                        << "\n*** Create Cast (new To) *** : " << *To << "\n");
-    }
-
-    NumErasedOtherIns++;
-    From->replaceAllUsesWith(To);
-    From->eraseFromParent();
-  }
-
-  bool isValueSubObjectOf(const AllocaInst& V, const AllocaInst& Obj) const {
-    auto VSize = V.getAllocationSizeInBits(*DL);
-    auto ObjSize = Obj.getAllocationSizeInBits(*DL);
-
-    assert((VSize.hasValue() && ObjSize.hasValue()) && "Types must be sized");
-
-    return VSize.getValue() < ObjSize.getValue();
-  }
-
-  bool isSizeOfTypesEqual(const Type *TyL, const Type *TyR) const {
-    auto *PTyL = dyn_cast<PointerType>(TyL);
-    auto *PTyR = dyn_cast<PointerType>(TyR);
-    if (!PTyL || !PTyR)
-      return false;
-
-    auto *ETyL = PTyL->getElementType();
-    auto *ETyR = PTyR->getElementType();
-
-    return (DL->getTypeAllocSize(ETyL) == DL->getTypeAllocSize(ETyR));
-  }
-
-  void collectInstructionsToErase(Instruction &I) {
-    SmallPtrSet<Instruction*, 16> Visited;
-
-    I.setMetadata(LLVMContext::MD_cxx_cleanup, nullptr);
-    collectCxxCleanupsAndLifetimes(I, Visited);
-  }
-
-  void collectCxxCleanupsAndLifetimes(Instruction &I,
-                                      SmallPtrSet<Instruction*, 16>& Visited) {
-    Visited.insert(&I);
-
-    for (auto *U : I.users()) {
-      if (auto *UI = dyn_cast<Instruction>(U))
-        if (!Visited.count(UI))
-          collectCxxCleanupsAndLifetimes(*UI, Visited);
-    }
-
-    if (isInstrCxxCleanupOrItsUsersAre(I)) {
-      LLVM_DEBUG(dbgs() << "*** CXX Cleanup *** : " << I << "\n");
-      DeadInstList.push_back(&I);
-    } else if (isInstrLifeTimeOrItsUsersAre(I)) {
-      LLVM_DEBUG(dbgs() << "*** LIFETIME *** : " << I << "\n");
-      DeadInstList.push_back(&I);
-    }
-  }
-
-  bool areUsersOfDestObjectBeforeCtor(const CallBase &Ctor,
-                                      const Instruction &Dest) {
-    auto *DestOpnd = Ctor.getOperand(0);
-    for (auto *U : Dest.users()) {
-      if (auto *UI = dyn_cast<Instruction>(U)) {
-        if ((UI == &Ctor) || (UI == DestOpnd))
-          continue;
-
-        if (isInstrLifeTimeOrItsUsersAre(*UI))
-          continue;
-
-        //DT->dominates(&Ctor, UI)
-        if (isPotentiallyReachable(&Ctor, UI, nullptr, DT))
-          continue;
-
-        if (isPotentiallyReachable(UI, &Ctor, nullptr, DT)) {
-          LLVM_DEBUG(dbgs() << "*** AllocTo has copy ctor that is reachable"
-                               " from user *** : " << *UI << "\n");
-          assert(!isCxxCleanup(*UI) && "cleanup must be dominated by ctor");
-          return false;
-        }
-      }
-    }
-
-    return true;
-  }
-
-  /// This is responsible for automatic data cleanup of pass
+  /// This class is responsible for automatic data cleanup of pass
   struct CtorStateRAII {
-    explicit CtorStateRAII(CXXCopyElisionLegacyPass *P) : Pass(P) {}
+    explicit CtorStateRAII(CXXCopyElisionLegacyPass &P) : Pass(P) {}
 
     ~CtorStateRAII() {
-      Pass->DeadInstList.clear();
-      Pass->To = Pass->From = nullptr;
+      Pass.DeadInstList.clear();
+      Pass.DstObj = Pass.SrcObj = nullptr;
     }
 
   private:
-    CXXCopyElisionLegacyPass *Pass;
+    CXXCopyElisionLegacyPass &Pass;
   };
 
   DominatorTree *DT = nullptr;
-  const DataLayout* DL = nullptr;
+  const DataLayout *DL = nullptr;
   SmallVector<Instruction *, 128> DeadInstList;
-  Instruction *From = nullptr;
-  Instruction *To = nullptr;
+  Instruction *SrcObj = nullptr;
+  Instruction *DstObj = nullptr;
 };
+
+//bool operator<(CXXCopyElisionLegacyPass::AllocSize ASize1,
+//               CXXCopyElisionLegacyPass::AllocSize ASize2) {
+//  auto Size1 = ASize1.AI.getAllocationSizeInBits(ASize1.DL);
+//  auto Size2 = ASize2.AI.getAllocationSizeInBits(ASize2.DL);
+//  assert((Size1.hasValue() && Size2.hasValue()) && "Types must be sized");
+//
+//  return Size1.getValue() < Size2.getValue();
+//}
+
+//bool operator>(CXXCopyElisionLegacyPass::AllocSize ASize1,
+//               CXXCopyElisionLegacyPass::AllocSize ASize2) {
+//  auto Size1 = ASize1.AI.getAllocationSizeInBits(ASize1.DL);
+//  auto Size2 = ASize2.AI.getAllocationSizeInBits(ASize2.DL);
+//  assert((Size1.hasValue() && Size2.hasValue()) && "Types must be sized");
+//
+//  return Size1.getValue() > Size2.getValue();
+//}
+
+bool operator==(CXXCopyElisionLegacyPass::AllocSize ASize1,
+                CXXCopyElisionLegacyPass::AllocSize ASize2) {
+  auto Size1 = ASize1.AI.getAllocationSizeInBits(ASize1.DL);
+  auto Size2 = ASize2.AI.getAllocationSizeInBits(ASize2.DL);
+  assert((Size1.hasValue() && Size2.hasValue()) && "Types must be sized");
+
+  return Size1.getValue() == Size2.getValue();
+}
+
+bool operator!=(CXXCopyElisionLegacyPass::AllocSize ASize1,
+                CXXCopyElisionLegacyPass::AllocSize ASize2) {
+  return !(ASize1 == ASize2);
+}
+
+bool CXXCopyElisionLegacyPass::canCtorBeElided(CallBase &Ctor) {
+  auto *DstOpnd = Ctor.getOperand(0);
+  auto *SrcOpnd = Ctor.getOperand(1);
+
+  auto *DstAlloc = dyn_cast<AllocaInst>(GetUnderlyingObject(DstOpnd, *DL));
+  auto *SrcAlloc = dyn_cast<AllocaInst>(GetUnderlyingObject(SrcOpnd, *DL));
+
+  // consider only automatic variables
+  if (!SrcAlloc || !DstAlloc)
+    return false;
+
+  // TODO: consider sub-object cases in future
+  if (sizeOf(*SrcAlloc) != sizeOf(*DstAlloc))
+    return false;
+
+  if (!areSizesOfTypesTheSame(DstOpnd->getType(), DstAlloc->getType()))
+    // construct sub-object of object. TODO: consider this in future
+    return false;
+
+  assert(areSizesOfTypesTheSame(SrcOpnd->getType(), SrcAlloc->getType()) &&
+         "Dst and Src sizes must be the same");
+  LLVM_DEBUG(dbgs() << "\n------------------------------------\n"
+                    << "Function : " << Ctor.getFunction()->getName()
+                    << "\nCtor : " << Ctor << "\nDstAlloc : " << *DstAlloc
+                    << "\nSrcAlloc : " << *SrcAlloc << "\n");
+
+  if (DstAlloc == SrcAlloc) {
+    // Such case can take place after applying this pass
+    // For example we have the following code:
+    //     %src = alloca %SomeType
+    //     %dst = alloca %SomeType
+    //     ...
+    //     some_cond1:
+    //       call @copy_ctor(%dst, %src)
+    //     ...
+    //     some_cond2:
+    //       call @copy_ctor(%dst, %src)
+    //     ...
+    // When this pass applies to the first call it will look like:
+    //     %dst = alloca %SomeType
+    //     ...
+    //     some_cond1:
+    //     ...
+    //     some_cond2:
+    //       call @copy_ctor(%dst, %dst) // It will be after RAUW
+    //     ...
+    // Therefore this situation is not correct
+    // and we must eliminate second the call
+    DstObj = SrcObj = DstAlloc;
+    return true;
+  }
+
+  if (!areAllUsersOfDstAllocaAfterCtor(Ctor, *DstAlloc))
+    // this case can take place after some optimizations
+    // TODO: consider in future in more details
+    return false;
+
+  if (!areAllUsersOfSrcAllocaBeforeCtor(Ctor, *SrcAlloc))
+    // Src has users after ctor
+    return false;
+
+  // collect all cleanup and lifetime instructions that will be deleted
+  collectInstructionsToErase(*SrcAlloc);
+
+  DstObj = DstAlloc;
+  SrcObj = SrcAlloc;
+
+  // We need to remove all lifetime instructions of value because
+  // lifetime of value can be increased after replacement
+  // TODO: for To we need to figure out the biggest lifetime of From and To
+  //       but don't just remove intrinsics
+  for (auto *U : DstObj->users())
+    if (auto *UI = dyn_cast<Instruction>(U))
+      if (isLifeTimeInstruction(*UI)) {
+        for (auto *UU : UI->users())
+          DeadInstList.push_back(cast<Instruction>(UU));
+        DeadInstList.push_back(UI);
+      }
+
+#ifndef NDEBUG
+  for (const auto *DI : DeadInstList) {
+    LLVM_DEBUG(dbgs() << "*** Dead Inst *** : " << *DI << "\n");
+  }
+#endif
+
+  return true;
+}
+
+bool CXXCopyElisionLegacyPass::areAllUsersOfSrcAllocaBeforeCtor(
+    const CallBase &Ctor, const AllocaInst &SrcAlloc) const {
+  for (auto *U : SrcAlloc.users()) {
+    auto *I = dyn_cast<Instruction>(U);
+    if (!I)
+      return false;
+
+    if (I == &Ctor)
+      continue;
+
+    LLVM_DEBUG(dbgs() << "User : " << *I << "\n");
+
+    if (isInstrCxxCleanupOrItsUsersAre(*I) || isInstrLifeTimeOrItsUsersAre(*I))
+      continue;
+
+    if (DT->dominates(I, &Ctor))
+      // if instruction dominates ctor then it's always before it
+      continue;
+
+    if (isPotentiallyReachable(&Ctor, I, nullptr, DT))
+      // Src has users after ctor
+      return false;
+  }
+
+  return true;
+}
+
+void CXXCopyElisionLegacyPass::replaceSrcObjWithDstObj() {
+  if (SrcObj == DstObj)
+    return;
+
+  auto *FromType = SrcObj->getType();
+  auto *ToType = DstObj->getType();
+
+  LLVM_DEBUG(dbgs() << "Replace Inst (SrcObj) : " << *SrcObj
+                    << "\nWith (DstObj) : " << *DstObj << "\n");
+
+  if (FromType != ToType) {
+    // Insert after all Alloca instructions
+    auto *InsertBefore = DstObj->getNextNode();
+    while (isa<AllocaInst>(InsertBefore))
+      InsertBefore = InsertBefore->getNextNode();
+
+    DstObj = CastInst::CreateBitOrPointerCast(DstObj, FromType,
+                                              "cxx.elision.cast", InsertBefore);
+
+    LLVM_DEBUG(dbgs() << "FromType : " << *FromType
+                      << "\nToType : " << *ToType
+                      << "\nCreate Cast (new DstObj) : " << *DstObj << "\n");
+  }
+
+  NumErasedOtherIns++;
+  SrcObj->replaceAllUsesWith(DstObj);
+  SrcObj->eraseFromParent();
+}
+
+bool CXXCopyElisionLegacyPass::areSizesOfTypesTheSame(const Type *TyL,
+                                                      const Type *TyR) const {
+  const auto *PTyL = dyn_cast<PointerType>(TyL);
+  const auto *PTyR = dyn_cast<PointerType>(TyR);
+
+  if (!PTyL || !PTyR)
+    return false;
+
+  auto *ETyL = PTyL->getElementType();
+  auto *ETyR = PTyR->getElementType();
+
+  return DL->getTypeAllocSize(ETyL) == DL->getTypeAllocSize(ETyR);
+}
+
+void CXXCopyElisionLegacyPass::collectInstructionsToErase(Instruction &I) {
+  SmallPtrSet<Instruction *, 16> Visited;
+
+  I.setMetadata(LLVMContext::MD_cxx_cleanup, nullptr);
+  collectInstructionsToErase(I, Visited);
+}
+
+void CXXCopyElisionLegacyPass::collectInstructionsToErase(
+    Instruction &I, SmallPtrSet<Instruction *, 16> &Visited) {
+
+  Visited.insert(&I);
+
+  for (auto *U : I.users()) {
+    if (auto *UI = dyn_cast<Instruction>(U))
+      if (!Visited.count(UI))
+        collectInstructionsToErase(*UI, Visited);
+  }
+
+  if (isInstrCxxCleanupOrItsUsersAre(I)) {
+    LLVM_DEBUG(dbgs() << "CXX Cleanup : " << I << "\n");
+    DeadInstList.push_back(&I);
+  } else if (isInstrLifeTimeOrItsUsersAre(I)) {
+    LLVM_DEBUG(dbgs() << "LIFETIME : " << I << "\n");
+    DeadInstList.push_back(&I);
+  }
+}
+
+bool CXXCopyElisionLegacyPass::areAllUsersOfDstAllocaAfterCtor(
+    const CallBase &Ctor, const AllocaInst &DstAlloc) const {
+  auto *DstOpnd = Ctor.getOperand(0);
+
+  for (const auto *U : DstAlloc.users()) {
+    const auto *UI = dyn_cast<Instruction>(U);
+    if (!UI)
+      continue;
+
+    if (UI == &Ctor || UI == DstOpnd)
+      // skip user if it's ctor itself or its dst object
+      continue;
+
+    if (isInstrLifeTimeOrItsUsersAre(*UI))
+      // skip lifetime intrinsic
+      continue;
+
+    if (isPotentiallyReachable(&Ctor, UI, nullptr, DT))
+      // We can reach some user of Dest from Ctor. Note that
+      // isPotentiallyReachable(&Ctor, UI) can return the same result that
+      // isPotentiallyReachable(UI, &Ctor). For this reason we need to check
+      // the first condition before the second one
+      continue;
+
+    if (isPotentiallyReachable(UI, &Ctor, nullptr, DT)) {
+      LLVM_DEBUG(dbgs() << "Dest object has copy/move ctor that is reachable"
+                           " from user : "
+                        << *UI << "\n");
+      assert(!isCxxCleanup(*UI) && "cleanup must be dominated by ctor");
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void CXXCopyElisionLegacyPass::removeDeadInstructions(DomTreeUpdater &DTU) {
+  for (auto *DeadI : DeadInstList) {
+    if (isCxxCleanup(*DeadI)) {
+      NumErasedCleanup++;
+      LLVM_DEBUG(dbgs() << "Erase Cleanup : " << *DeadI << "\n");
+    } else {
+      NumErasedOtherIns++;
+      LLVM_DEBUG(dbgs() << "Erase Inst : " << *DeadI << "\n");
+    }
+
+    assert(!DeadI->getNumUses() && "Erased instruction has uses");
+
+    ArrayRef<DominatorTree::UpdateType> Updates;
+
+    if (auto *DeadInvoke = dyn_cast<InvokeInst>(DeadI)) {
+      NumErasedLpads++;
+      DeadI = changeToCall(DeadInvoke, &DTU);
+    } else if (DeadI->isTerminator()) {
+      Updates = makeUnconditionalBranch(DeadI);
+    }
+
+    DeadI->eraseFromParent();
+
+    if (!Updates.empty())
+      DTU.applyUpdatesPermissive(Updates);
+  }
+}
+
+bool CXXCopyElisionLegacyPass::performUltimateCopyElision(Function &F,
+                                                          CtorVector &Ctors) {
+  DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Eager);
+  bool Changed = false;
+
+  for (auto *Call : Ctors) {
+    CtorStateRAII CleanupObj(*this);
+
+    if (!canCtorBeElided(*Call))
+      continue;
+
+    if (isApplyingLimitReached())
+      return false;
+
+    LLVM_DEBUG(dbgs() << "*** Erase Ctor *** : " << *Call << "\n");
+
+    if (auto *Invoke = dyn_cast<InvokeInst>(Call)) {
+      NumErasedLpads++;
+      Call = changeToCall(Invoke, &DTU);
+    }
+
+    // remove copy/move constructor
+    NumErasedCMCtors++;
+    Call->eraseFromParent();
+
+    // remove cleanup instructions
+    removeDeadInstructions(DTU);
+
+    // replace all uses of Src with Dst
+    replaceSrcObjWithDstObj();
+
+    Changed = true;
+  }
+
+  if (Changed) {
+    removeUnreachableBlocks(F, &DTU);
+#ifndef NDEBUG
+    assert(!verifyFunction(F, &errs()));
+    assert(DT->verify(DominatorTree::VerificationLevel::Fast));
+#endif
+  }
+
+  return Changed;
+}
 
 } // end anonymous namespace
 
