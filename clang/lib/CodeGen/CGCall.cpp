@@ -430,10 +430,14 @@ CodeGenTypes::arrangeCXXConstructorCall(const CallArgList &args,
   }
 
   CXXCallType type = CXXCallType::None;
-  if (CtorKind == Ctor_Complete &&
-      D->isCopyOrMoveConstructor() &&
-      Context.getLangOpts().UltimateCopyElision)
-    type = CXXCallType::CM_Ctor;
+  if (Context.getLangOpts().UltimateCopyElision && CtorKind == Ctor_Complete) {
+    unsigned IsVolatile = 0;
+    bool IsCMCtor = D->isCopyOrMoveConstructor(IsVolatile);
+    IsVolatile &= Qualifiers::Volatile;
+
+    type = !IsCMCtor ? CXXCallType::Ctor
+                     : IsVolatile ? CXXCallType::None : CXXCallType::CM_Ctor;
+  }
 
   return arrangeLLVMFunctionInfo(ResultType, /*instanceMethod=*/true,
                                  /*chainCall=*/false, ArgTypes, Info,
@@ -564,8 +568,8 @@ CodeGenTypes::arrangeMSCtorClosure(const CXXConstructorDecl *CD,
   CallingConv CC = Context.getDefaultCallingConvention(
       /*IsVariadic=*/false, /*IsCXXMethod=*/true);
   return arrangeLLVMFunctionInfo(Context.VoidTy, /*instanceMethod=*/true,
-                                 /*chainCall=*/false,
-                                 ArgTys, FunctionType::ExtInfo(CC), {},
+                                 /*chainCall=*/false, ArgTys,
+                                 FunctionType::ExtInfo(CC), {},
                                  RequiredArgs::All);
 }
 
@@ -610,9 +614,9 @@ arrangeFreeFunctionLikeCall(CodeGenTypes &CGT,
   for (const auto &arg : args)
     argTypes.push_back(CGT.getContext().getCanonicalParamType(arg.Ty));
   return CGT.arrangeLLVMFunctionInfo(GetReturnType(fnType->getReturnType()),
-                                     /*instanceMethod=*/false,
-                                     chainCall, argTypes, fnType->getExtInfo(),
-                                     paramInfos, required);
+                                     /*instanceMethod=*/false, chainCall,
+                                     argTypes, fnType->getExtInfo(), paramInfos,
+                                     required);
 }
 
 /// Figure out the rules for calling a function with the given formal
@@ -644,7 +648,7 @@ CodeGenTypes::arrangeBlockFunctionDeclaration(const FunctionProtoType *proto,
 
   return arrangeLLVMFunctionInfo(GetReturnType(proto->getReturnType()),
                                  /*instanceMethod*/ false, /*chainCall*/ false,
-                                  argTypes, proto->getExtInfo(), paramInfos,
+                                 argTypes, proto->getExtInfo(), paramInfos,
                                  RequiredArgs::forPrototypePlus(proto, 1));
 }
 
@@ -831,6 +835,7 @@ CGFunctionInfo *CGFunctionInfo::create(unsigned llvmCC,
   FI->ChainCall = chainCall;
   FI->CmseNSCall = info.getCmseNSCall();
   FI->NoReturn = info.getNoReturn();
+  FI->CxxCtor = (type == CXXCallType::Ctor);
   FI->CxxCMCtor = (type == CXXCallType::CM_Ctor);
   FI->CxxDtor = (type == CXXCallType::Dtor);
   FI->ReturnsRetained = info.getProducesResult();
@@ -4901,10 +4906,12 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
   if (CGM.getLangOpts().ObjCAutoRefCount)
     AddObjCARCExceptionMetadata(CI);
 
-  if (CallInfo.isCxxCMCtor())
-    AddCxxFuncCallMetadata(CI, llvm::LLVMContext::MD_cxx_cm_ctor);
+  if (CallInfo.isCxxCtor())
+    AddCxxFuncCallMetadata(CI, llvm::LLVMContext::MD_init);
+  else if (CallInfo.isCxxCMCtor())
+    AddCxxFuncCallMetadata(CI, llvm::LLVMContext::MD_copy_init);
   else if (CallInfo.isCxxDtor())
-    AddCxxFuncCallMetadata(CI, llvm::LLVMContext::MD_cxx_cleanup);
+    AddCxxFuncCallMetadata(CI, llvm::LLVMContext::MD_cleanup);
 
   // Suppress tail calls if requested.
   if (llvm::CallInst *Call = dyn_cast<llvm::CallInst>(CI)) {

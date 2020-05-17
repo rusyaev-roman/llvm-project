@@ -89,11 +89,11 @@ FunctionPass *createAggressiveDCEPass();
 
 //===----------------------------------------------------------------------===//
 //
-// CXXCopyElision - Remove C++ copy/move ctors and corresponding dtors,
+// CopyElision - Remove C++ copy/move ctors and corresponding dtors,
 // replacing src object with dst one wherever possible. For more information
 // see: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p0889r1.html
 //
-FunctionPass *createCXXCopyElisionPass();
+FunctionPass *createCopyElisionPass();
 
 //===----------------------------------------------------------------------===//
 //

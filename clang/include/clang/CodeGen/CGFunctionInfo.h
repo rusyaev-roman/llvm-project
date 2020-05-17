@@ -479,6 +479,7 @@ public:
 // types, will be generated special metadata
 enum class CXXCallType {
   None,
+  Ctor,    // non copy/move constructor
   CM_Ctor, // copy/move constructor
   Dtor     // destructor
 };
@@ -519,7 +520,8 @@ class CGFunctionInfo final
   /// Whether this function is a CMSE nonsecure call
   unsigned CmseNSCall : 1;
 
-  /// Function is c++ copy/move constructor or destructor.
+  /// Function is c++ constructor or destructor.
+  unsigned CxxCtor : 1;
   unsigned CxxCMCtor : 1;
   unsigned CxxDtor : 1;
 
@@ -616,8 +618,9 @@ public:
 
   bool isCmseNSCall() const { return CmseNSCall; }
 
+  bool isCxxCtor() const { return CxxCtor; }
   bool isCxxCMCtor() const { return CxxCMCtor; }
-  bool isCxxDtor()   const { return CxxDtor; }
+  bool isCxxDtor() const { return CxxDtor; }
 
   bool isNoReturn() const { return NoReturn; }
 
@@ -692,6 +695,7 @@ public:
     ID.AddInteger(getASTCallingConvention());
     ID.AddBoolean(InstanceMethod);
     ID.AddBoolean(ChainCall);
+    ID.AddBoolean(CxxCtor);
     ID.AddBoolean(CxxCMCtor);
     ID.AddBoolean(CxxDtor);
     ID.AddBoolean(NoReturn);
@@ -723,6 +727,7 @@ public:
     ID.AddInteger(info.getCC());
     ID.AddBoolean(InstanceMethod);
     ID.AddBoolean(ChainCall);
+    ID.AddBoolean(type == CXXCallType::Ctor);
     ID.AddBoolean(type == CXXCallType::CM_Ctor);
     ID.AddBoolean(type == CXXCallType::Dtor);
     ID.AddBoolean(info.getNoReturn());
