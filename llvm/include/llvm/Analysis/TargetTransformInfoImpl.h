@@ -555,6 +555,10 @@ public:
     case Intrinsic::dbg_label:
     case Intrinsic::invariant_start:
     case Intrinsic::invariant_end:
+    case Intrinsic::cleanup_start:
+    case Intrinsic::cleanup_end:
+    case Intrinsic::copy_start:
+    case Intrinsic::copy_end:
     case Intrinsic::launder_invariant_group:
     case Intrinsic::strip_invariant_group:
     case Intrinsic::is_constant:

@@ -274,9 +274,9 @@ static bool reportInvalidCandidate(const Instruction &I,
 
 /// Collect all instructions in between \p StartInst and \p EndInst, and store
 /// them in \p InBetweenInsts.
-static void
-collectInstructionsInBetween(Instruction &StartInst, const Instruction &EndInst,
-                             SmallPtrSetImpl<Instruction *> &InBetweenInsts) {
+void llvm::collectInstructionsInBetween(
+    Instruction &StartInst, const Instruction &EndInst,
+    SmallPtrSetImpl<Instruction *> &InBetweenInsts) {
   assert(InBetweenInsts.empty() && "Expecting InBetweenInsts to be empty");
 
   /// Get the next instructions of \p I, and push them to \p WorkList.

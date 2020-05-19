@@ -3825,6 +3825,9 @@ bool CompilerInvocation::ParseLangArgsImpl(LangOptions &Opts, ArgList &Args,
   Opts.Blocks = Args.hasArg(OPT_fblocks) || (Opts.OpenCL
     && Opts.OpenCLVersion == 200);
 
+  Opts.UltimateCopyElision = Args.hasArg(OPT_fultimate_copy_elision);
+  // Opts.UltimateCopyElision = true;
+
   Opts.ConvergentFunctions = Opts.OpenCL || (Opts.CUDA && Opts.CUDAIsDevice) ||
                              Opts.SYCLIsDevice ||
                              Args.hasArg(OPT_fconvergent_functions);

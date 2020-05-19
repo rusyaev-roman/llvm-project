@@ -867,6 +867,10 @@ SplitBlockPredecessorsImpl(BasicBlock *BB, ArrayRef<BasicBlock *> Preds,
   // The new block unconditionally branches to the old block.
   BranchInst *BI = BranchInst::Create(BB, NewBB);
 
+  BI->copyMetadata(BB->front(),
+                   {LLVMContext::MD_init, LLVMContext::MD_copy_init,
+                    LLVMContext::MD_cleanup});
+
   Loop *L = nullptr;
   BasicBlock *OldLatch = nullptr;
   // Splitting the predecessors of a loop header creates a preheader block.

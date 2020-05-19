@@ -679,6 +679,7 @@ void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
   PMBuilder.PrepareForThinLTO = CodeGenOpts.PrepareForThinLTO;
   PMBuilder.PrepareForLTO = CodeGenOpts.PrepareForLTO;
   PMBuilder.RerollLoops = CodeGenOpts.RerollLoops;
+  PMBuilder.EnableRCE = LangOpts.UltimateCopyElision;
 
   MPM.add(new TargetLibraryInfoWrapperPass(*TLII));
 

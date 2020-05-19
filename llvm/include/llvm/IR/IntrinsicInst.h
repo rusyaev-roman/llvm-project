@@ -92,6 +92,10 @@ public:
     case Intrinsic::dbg_declare:
     case Intrinsic::dbg_value:
     case Intrinsic::dbg_label:
+    case Intrinsic::cleanup_start:
+    case Intrinsic::cleanup_end:
+    case Intrinsic::copy_start:
+    case Intrinsic::copy_end:
     case Intrinsic::invariant_start:
     case Intrinsic::invariant_end:
     case Intrinsic::lifetime_start:

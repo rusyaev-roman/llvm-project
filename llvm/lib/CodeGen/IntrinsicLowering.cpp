@@ -437,11 +437,15 @@ void IntrinsicLowering::LowerIntrinsicCall(CallInst *CI) {
      break;
   case Intrinsic::invariant_start:
   case Intrinsic::lifetime_start:
+  case Intrinsic::cleanup_start:
+  case Intrinsic::copy_start:
     // Discard region information.
     CI->replaceAllUsesWith(UndefValue::get(CI->getType()));
     break;
   case Intrinsic::invariant_end:
   case Intrinsic::lifetime_end:
+  case Intrinsic::cleanup_end:
+  case Intrinsic::copy_end:
     // Discard region information.
     break;
   }

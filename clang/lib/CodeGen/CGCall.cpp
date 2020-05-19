@@ -1389,6 +1389,106 @@ static Address emitAddressAtOffset(CodeGenFunction &CGF, Address addr,
   return addr;
 }
 
+static void markCallInsAsInitOrCleanup(llvm::CallBase &CI, unsigned KindID) {
+  assert(KindID == llvm::LLVMContext::MD_init ||
+         KindID == llvm::LLVMContext::MD_copy_init ||
+         KindID == llvm::LLVMContext::MD_cleanup);
+  auto &Context = CI.getContext();
+  llvm::MDBuilder MDB(Context);
+
+  // FIXME: int8 and add comment
+  auto *FirstGeneration = MDB.createConstant(
+      llvm::ConstantInt::get(llvm::Type::getInt64Ty(Context), 1));
+
+  llvm::MDNode *Node = llvm::MDNode::get(Context, FirstGeneration);
+
+  CI.setMetadata(KindID, Node);
+}
+
+static bool isDeclCxxCtor(CodeGenFunction &CGF, GlobalDecl GD) {
+  return dyn_cast_or_null<CXXConstructorDecl>(GD.getDecl()) &&
+         GD.getCtorType() == Ctor_Complete;
+}
+
+static bool isDeclNonVolatileCxxCMCtor(const CodeGenFunction &CGF,
+                                       GlobalDecl GD) {
+  const auto *D = dyn_cast_or_null<CXXConstructorDecl>(GD.getDecl());
+
+  if (!D || GD.getCtorType() != Ctor_Complete) {
+    return false;
+  }
+
+  unsigned IsVolatile = 0;
+  bool IsCMCtor = D->isCopyOrMoveConstructor(IsVolatile);
+  IsVolatile &= Qualifiers::Volatile;
+
+  return !IsVolatile && IsCMCtor;
+}
+
+static bool isDeclCxxDtor(CodeGenFunction &CGF, GlobalDecl GD) {
+  return dyn_cast_or_null<CXXDestructorDecl>(GD.getDecl()) &&
+         GD.getDtorType() == Dtor_Complete;
+}
+
+// Emit copy.start/copy.end or cleanup.start/cleanup.end intrinsics
+// that are needed for "ultimate copy elision" optimization
+// (RCE pass implements this optimization)
+// Mark call instruction with special metadata depending
+// on what it calls (ctor, copy/move ctor or dtor)
+static void EmitCopyOrCleanupIntrinsicsForCall(CodeGenFunction &CGF,
+                                               llvm::CallBase &CI,
+                                               GlobalDecl CallGD) {
+  const auto &LangOpts = CGF.getLangOpts();
+  const auto &CGOpts = CGF.CGM.getCodeGenOpts();
+  assert(LangOpts.UltimateCopyElision && "UCE is disabled");
+
+  if (CGOpts.DisableLLVMPasses || CGOpts.OptimizationLevel == 0)
+    return;
+
+  auto EmitStartEnd = [&CGF, &CI](bool EmitCopy) {
+    {
+      llvm::IRBuilder<>::InsertPointGuard IPGuard(CGF.Builder);
+      CGF.Builder.SetInsertPoint(&CI);
+
+      if (EmitCopy)
+        CGF.EmitCopyStartOrEnd(CI.getOperand(0), CI.getOperand(1),
+                               /*EmitStart*/ true);
+      else
+        CGF.EmitCleanupStartOrEnd(CI.getOperand(0), /*EmitStart*/ true);
+    }
+
+    if (EmitCopy)
+      CGF.EmitCopyStartOrEnd(CI.getOperand(0), CI.getOperand(1),
+                             /*EmitStart*/ false);
+    else
+      CGF.EmitCleanupStartOrEnd(CI.getOperand(0), /*EmitStart*/ false);
+  };
+
+  // emmit copy.start and copy.end intrinsics if decl is copy/move ctor
+  if (isDeclNonVolatileCxxCMCtor(CGF, CallGD)) {
+    // mark call instruction with 'copy_init' metadata
+    markCallInsAsInitOrCleanup(CI, llvm::LLVMContext::MD_copy_init);
+
+    assert(CI.getNumArgOperands() == 2 && "invalid copy/move ctor");
+    EmitStartEnd(/*EmitCopy*/ true);
+    return;
+  }
+
+  // emmit cleanup.start and cleanup.end intrinsics if decl is copy/move ctor
+  if (isDeclCxxDtor(CGF, CallGD)) {
+    // mark call instruction with 'cleanup' metadata
+    markCallInsAsInitOrCleanup(CI, llvm::LLVMContext::MD_cleanup);
+
+    assert(CI.getNumArgOperands() == 1);
+    EmitStartEnd(/*EmitCopy*/ false);
+    return;
+  }
+
+  if (isDeclCxxCtor(CGF, CallGD))
+    // mark call instruction with 'init' metadata
+    markCallInsAsInitOrCleanup(CI, llvm::LLVMContext::MD_init);
+}
+
 namespace {
 
 /// Encapsulates information about the way function arguments from
@@ -5103,6 +5203,13 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
   }
   if (callOrInvoke)
     *callOrInvoke = CI;
+
+  // Emit special intrinsics and mark call instruction with special
+  // metadata if 'ultimate copy elision' optimization is enabled
+  if (getLangOpts().UltimateCopyElision) {
+    EmitCopyOrCleanupIntrinsicsForCall(
+        *this, *CI, Callee.getAbstractInfo().getCalleeDecl());
+  }
 
   // If this is within a function that has the guard(nocf) attribute and is an
   // indirect call, add the "guard_nocf" attribute to this call to indicate that

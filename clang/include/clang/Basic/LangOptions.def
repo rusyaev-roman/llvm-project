@@ -260,6 +260,7 @@ LANGOPT(ConceptSatisfactionCaching , 1, 1, "enable satisfaction caching for C++2
 BENIGN_LANGOPT(ModulesCodegen , 1, 0, "Modules code generation")
 BENIGN_LANGOPT(ModulesDebugInfo , 1, 0, "Modules debug info")
 BENIGN_LANGOPT(ElideConstructors , 1, 1, "C++ copy constructor elision")
+BENIGN_LANGOPT(UltimateCopyElision, 1, 0, "Aggressive C++ copy constructor elision")
 BENIGN_LANGOPT(DumpRecordLayouts , 1, 0, "dumping the layout of IRgen'd records")
 BENIGN_LANGOPT(DumpRecordLayoutsSimple , 1, 0, "dumping the layout of IRgen'd records in a simple form")
 BENIGN_LANGOPT(DumpVTableLayouts , 1, 0, "dumping the layouts of emitted vtables")

@@ -1316,6 +1316,8 @@ defm elide_constructors : BoolFOption<"elide-constructors",
   LangOpts<"ElideConstructors">, DefaultTrue,
   NegFlag<SetFalse, [CC1Option], "Disable C++ copy constructor elision">,
   PosFlag<SetTrue>>;
+def fultimate_copy_elision : Flag<["-"], "fultimate-copy-elision">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Enable aggressive C++ copy elision">;
 def fno_elide_type : Flag<["-"], "fno-elide-type">, Group<f_Group>,
     Flags<[CC1Option]>,
     HelpText<"Do not elide types when printing diagnostics">,
@@ -2041,6 +2043,8 @@ defm digraphs : BoolFOption<"digraphs",
   PosFlag<SetTrue, [], "Enable alternative token representations '<:', ':>', '<%', '%>', '%:', '%:%:' (default)">,
   NegFlag<SetFalse, [], "Disallow alternative token representations '<:', ':>', '<%', '%>', '%:', '%:%:'">,
   BothFlags<[CC1Option]>>;
+def fno_ultimate_copy_elision: Flag<["-"], "fno-ultimate-copy-elision">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Disable aggressive C++ copy elision">;
 def fno_eliminate_unused_debug_symbols : Flag<["-"], "fno-eliminate-unused-debug-symbols">, Group<f_Group>;
 def fno_inline_functions : Flag<["-"], "fno-inline-functions">, Group<f_clang_Group>, Flags<[CC1Option]>;
 def fno_inline : Flag<["-"], "fno-inline">, Group<f_clang_Group>, Flags<[CC1Option]>;

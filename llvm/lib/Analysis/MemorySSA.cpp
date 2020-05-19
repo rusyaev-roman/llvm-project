@@ -284,6 +284,10 @@ instructionClobbersQuery(const MemoryDef *MD, const MemoryLocation &UseLoc,
     switch (II->getIntrinsicID()) {
     case Intrinsic::invariant_start:
     case Intrinsic::invariant_end:
+    case Intrinsic::cleanup_start:
+    case Intrinsic::cleanup_end:
+    case Intrinsic::copy_start:
+    case Intrinsic::copy_end:
     case Intrinsic::assume:
     case Intrinsic::experimental_noalias_scope_decl:
       return {false, NoAlias};

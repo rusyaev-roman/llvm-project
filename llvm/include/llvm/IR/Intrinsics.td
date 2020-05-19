@@ -1128,6 +1128,19 @@ def int_invariant_end   : DefaultAttrsIntrinsic<[],
                                      NoCapture<ArgIndex<2>>,
                                      ImmArg<ArgIndex<1>>]>;
 
+def int_cleanup_start  : Intrinsic<[],
+                                    [llvm_anyptr_ty],
+                                    [IntrArgMemOnly, IntrWillReturn, NoCapture<ArgIndex<0>>]>;
+def int_cleanup_end    : Intrinsic<[],
+                                    [llvm_anyptr_ty],
+                                    [IntrArgMemOnly, IntrWillReturn, NoCapture<ArgIndex<0>>]>;
+def int_copy_start     : Intrinsic<[],
+                                    [llvm_anyptr_ty, llvm_anyptr_ty],
+                                    [IntrArgMemOnly, IntrWillReturn, NoCapture<ArgIndex<1>>, NoCapture<ArgIndex<0>>]>;
+def int_copy_end       : Intrinsic<[],
+                                    [llvm_anyptr_ty, llvm_anyptr_ty],
+                                    [IntrArgMemOnly, IntrWillReturn, NoCapture<ArgIndex<1>>, NoCapture<ArgIndex<0>>]>;
+
 // launder.invariant.group can't be marked with 'readnone' (IntrNoMem),
 // because it would cause CSE of two barriers with the same argument.
 // Inaccessiblememonly says that the barrier doesn't read the argument,

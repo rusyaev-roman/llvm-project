@@ -829,6 +829,49 @@ static void PropagateCallSiteMetadata(CallBase &CB, ValueToValueMapTy &VMap) {
   }
 }
 
+static void PropagateGenMetadata(CallBase &CB, ValueToValueMapTy &VMap,
+                                 unsigned MType) {
+  auto *M = CB.getMetadata(MType);
+  if (!M)
+    return;
+
+  auto &Context = CB.getContext();
+  MDBuilder MDB(Context);
+
+  assert(M->getNumOperands() == 1 && "invalid metadata operands num!");
+
+  auto *CurGeneration = mdconst::extract<ConstantInt>(M->getOperand(0));
+
+  uint64_t NextGenerationVal = CurGeneration->getZExtValue() + 1;
+  auto *NextGeneration = MDB.createConstant(
+      ConstantInt::get(Type::getInt64Ty(Context), NextGenerationVal));
+
+  auto *NewM = MDNode::get(Context, NextGeneration);
+
+  for (auto const &Entry : VMap) {
+    auto *NI = dyn_cast_or_null<Instruction>(Entry.second);
+    if (!NI)
+      continue;
+
+    if (any_of(CB.args(), [NI](const Value *I) { return I == NI; }))
+      // skip function arguments
+      continue;
+
+    if (auto *NIM = NI->getMetadata(MType)) {
+      assert(NIM->getNumOperands() == 1 && "invalid metadata operands num!");
+      auto *NIMGen = mdconst::extract<ConstantInt>(NIM->getOperand(0));
+
+      auto *NextNIMGen = MDB.createConstant(
+          ConstantInt::get(Type::getInt64Ty(Context),
+                           NIMGen->getZExtValue() + NextGenerationVal));
+
+      NI->setMetadata(MType, MDNode::get(Context, NextNIMGen));
+    } else {
+      NI->setMetadata(MType, NewM);
+    }
+  }
+}
+
 /// Utility for cloning !noalias and !alias.scope metadata. When a code region
 /// using scoped alias metadata is inlined, the aliasing relationships may not
 /// hold between the two version. It is necessary to create a deep clone of the
@@ -2038,6 +2081,11 @@ llvm::InlineResult llvm::InlineFunction(CallBase &CB, InlineFunctionInfo &IFI,
 
     // Propagate metadata on the callsite if necessary.
     PropagateCallSiteMetadata(CB, VMap);
+
+    // Propagate init, copy_init and cleanup metadata.
+    PropagateGenMetadata(CB, VMap, LLVMContext::MD_init);
+    PropagateGenMetadata(CB, VMap, LLVMContext::MD_copy_init);
+    PropagateGenMetadata(CB, VMap, LLVMContext::MD_cleanup);
 
     // Register any cloned assumptions.
     if (IFI.GetAssumptionCache)

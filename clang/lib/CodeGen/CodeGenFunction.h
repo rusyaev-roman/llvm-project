@@ -2838,6 +2838,10 @@ public:
   llvm::Value *EmitLifetimeStart(uint64_t Size, llvm::Value *Addr);
   void EmitLifetimeEnd(llvm::Value *Size, llvm::Value *Addr);
 
+  void EmitCleanupStartOrEnd(llvm::Value *Addr, bool EmitStart);
+  void EmitCopyStartOrEnd(llvm::Value *AddrDst, llvm::Value *AddrSrc,
+                          bool EmitStart);
+
   llvm::Value *EmitCXXNewExpr(const CXXNewExpr *E);
   void EmitCXXDeleteExpr(const CXXDeleteExpr *E);
 

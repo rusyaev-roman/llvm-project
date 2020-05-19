@@ -629,6 +629,10 @@ bool polly::isIgnoredIntrinsic(const Value *V) {
     // Invariant markers are supported/ignored.
     case llvm::Intrinsic::invariant_start:
     case llvm::Intrinsic::invariant_end:
+    case llvm::Intrinsic::cleanup_start:
+    case llvm::Intrinsic::cleanup_end:
+    case Intrinsic::copy_start:
+    case Intrinsic::copy_end:
     // Some misc annotations are supported/ignored.
     case llvm::Intrinsic::var_annotation:
     case llvm::Intrinsic::ptr_annotation:

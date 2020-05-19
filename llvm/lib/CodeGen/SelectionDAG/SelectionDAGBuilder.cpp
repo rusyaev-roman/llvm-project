@@ -6698,10 +6698,14 @@ void SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I,
     return;
   }
   case Intrinsic::invariant_start:
+  case Intrinsic::cleanup_start:
+  case Intrinsic::copy_start:
     // Discard region information.
     setValue(&I, DAG.getUNDEF(TLI.getPointerTy(DAG.getDataLayout())));
     return;
   case Intrinsic::invariant_end:
+  case Intrinsic::cleanup_end:
+  case Intrinsic::copy_end:
     // Discard region information.
     return;
   case Intrinsic::clear_cache:

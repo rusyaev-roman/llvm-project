@@ -825,3 +825,36 @@ llvm::Function *CodeGenFunction::generateDestroyHelper(
 
   return fn;
 }
+
+void CodeGenFunction::EmitCleanupStartOrEnd(llvm::Value *Addr, bool EmitStart) {
+  assert(Addr->getType()->getPointerAddressSpace() ==
+             CGM.getDataLayout().getAllocaAddrSpace() &&
+         "Pointer must be in alloca address space");
+
+  llvm::Intrinsic::ID StartEndID =
+      EmitStart ? llvm::Intrinsic::cleanup_start : llvm::Intrinsic::cleanup_end;
+  llvm::Function *CleanupStartEnd =
+      CGM.getIntrinsic(StartEndID, {Addr->getType()});
+
+  llvm::CallInst *C = Builder.CreateCall(CleanupStartEnd, {Addr});
+  C->setDoesNotThrow();
+}
+
+void CodeGenFunction::EmitCopyStartOrEnd(llvm::Value *AddrDst,
+                                         llvm::Value *AddrSrc, bool EmitStart) {
+  assert(AddrDst->getType()->getPointerAddressSpace() ==
+             CGM.getDataLayout().getAllocaAddrSpace() &&
+         "Pointer must be in alloca address space");
+
+  assert(AddrDst->getType()->getPointerAddressSpace() ==
+             AddrSrc->getType()->getPointerAddressSpace() &&
+         "Arguments are in different address spaces");
+
+  llvm::Intrinsic::ID StartEndID =
+      EmitStart ? llvm::Intrinsic::copy_start : llvm::Intrinsic::copy_end;
+  llvm::Function *CopyStartEnd =
+      CGM.getIntrinsic(StartEndID, {AddrDst->getType(), AddrSrc->getType()});
+
+  llvm::CallInst *C = Builder.CreateCall(CopyStartEnd, {AddrDst, AddrSrc});
+  C->setDoesNotThrow();
+}

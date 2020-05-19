@@ -208,6 +208,7 @@ PassManagerBuilder::PassManagerBuilder() {
     PerformThinLTO = EnablePerformThinLTO;
     DivergentTarget = false;
     CallGraphProfile = true;
+    EnableRCE = false /*true*/;
 }
 
 PassManagerBuilder::~PassManagerBuilder() {
@@ -381,6 +382,10 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
   // Start of function pass.
   // Break up aggregate allocas, using SSAUpdater.
   assert(OptLevel >= 1 && "Calling function optimizer with no optimization level!");
+
+  if (EnableRCE)
+    MPM.add(createRCEPass());
+
   MPM.add(createSROAPass());
   MPM.add(createEarlyCSEPass(true /* Enable mem-ssa. */)); // Catch trivial redundancies
   if (EnableKnowledgeRetention)
@@ -498,6 +503,9 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
     MPM.add(createDeadStoreEliminationPass());  // Delete dead stores
     MPM.add(createLICMPass(LicmMssaOptCap, LicmMssaNoAccForPromotionCap));
   }
+
+  if (EnableRCE)
+    MPM.add(createRCEPass());
 
   addExtensionsToPM(EP_ScalarOptimizerLate, MPM);
 
