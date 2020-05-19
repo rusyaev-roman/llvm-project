@@ -313,6 +313,14 @@ CodeGenTypes::arrangeCXXStructorDeclaration(GlobalDecl GD) {
 
   bool PassParams = true;
 
+  CXXCallType type = CXXCallType::None;
+  if (Context.getLangOpts().UltimateCopyElision &&
+      !getCodeGenOpts().DisableLLVMPasses &&
+      getCodeGenOpts().OptimizationLevel && isa<CXXDestructorDecl>(MD)) {
+    if (GD.getDtorType() == Dtor_Complete)
+      type = CXXCallType::Dtor;
+  }
+
   if (auto *CD = dyn_cast<CXXConstructorDecl>(MD)) {
     // A base class inheriting constructor doesn't get forwarded arguments
     // needed to construct a virtual base (or base class thereof).
@@ -350,7 +358,7 @@ CodeGenTypes::arrangeCXXStructorDeclaration(GlobalDecl GD) {
                                      : Context.VoidTy;
   return arrangeLLVMFunctionInfo(resultType, /*instanceMethod=*/true,
                                  /*chainCall=*/false, argTypes, extInfo,
-                                 paramInfos, required);
+                                 paramInfos, required, type);
 }
 
 static SmallVector<CanQualType, 16>
@@ -424,9 +432,22 @@ CodeGenTypes::arrangeCXXConstructorCall(const CallArgList &args,
     addExtParameterInfosForCall(ParamInfos, FPT.getTypePtr(), TotalPrefixArgs,
                                 ArgTypes.size());
   }
+
+  CXXCallType type = CXXCallType::None;
+  if (Context.getLangOpts().UltimateCopyElision &&
+      !getCodeGenOpts().DisableLLVMPasses &&
+      getCodeGenOpts().OptimizationLevel && CtorKind == Ctor_Complete) {
+    unsigned IsVolatile = 0;
+    bool IsCMCtor = D->isCopyOrMoveConstructor(IsVolatile);
+    IsVolatile &= Qualifiers::Volatile;
+
+    type = !IsCMCtor ? CXXCallType::Ctor
+                     : IsVolatile ? CXXCallType::None : CXXCallType::CM_Ctor;
+  }
+
   return arrangeLLVMFunctionInfo(ResultType, /*instanceMethod=*/true,
                                  /*chainCall=*/false, ArgTypes, Info,
-                                 ParamInfos, Required);
+                                 ParamInfos, Required, type);
 }
 
 /// Arrange the argument and result information for the declaration or
@@ -741,14 +762,15 @@ CodeGenTypes::arrangeLLVMFunctionInfo(CanQualType resultType,
                                       ArrayRef<CanQualType> argTypes,
                                       FunctionType::ExtInfo info,
                      ArrayRef<FunctionProtoType::ExtParameterInfo> paramInfos,
-                                      RequiredArgs required) {
+                                      RequiredArgs required,
+                                      CXXCallType type) {
   assert(llvm::all_of(argTypes,
                       [](CanQualType T) { return T.isCanonicalAsParam(); }));
 
   // Lookup or create unique function info.
   llvm::FoldingSetNodeID ID;
-  CGFunctionInfo::Profile(ID, instanceMethod, chainCall, info, paramInfos,
-                          required, resultType, argTypes);
+  CGFunctionInfo::Profile(ID, instanceMethod, chainCall, type,
+                          info, paramInfos, required, resultType, argTypes);
 
   void *insertPos = nullptr;
   CGFunctionInfo *FI = FunctionInfos.FindNodeOrInsertPos(ID, insertPos);
@@ -758,8 +780,8 @@ CodeGenTypes::arrangeLLVMFunctionInfo(CanQualType resultType,
   unsigned CC = ClangCallConvToLLVMCallConv(info.getCC());
 
   // Construct the function info.  We co-allocate the ArgInfos.
-  FI = CGFunctionInfo::create(CC, instanceMethod, chainCall, info,
-                              paramInfos, resultType, argTypes, required);
+  FI = CGFunctionInfo::create(CC, instanceMethod, chainCall, type,
+                              info, paramInfos, resultType, argTypes, required);
   FunctionInfos.InsertNode(FI, insertPos);
 
   bool inserted = FunctionsBeingProcessed.insert(FI).second;
@@ -797,6 +819,7 @@ CodeGenTypes::arrangeLLVMFunctionInfo(CanQualType resultType,
 CGFunctionInfo *CGFunctionInfo::create(unsigned llvmCC,
                                        bool instanceMethod,
                                        bool chainCall,
+                                       CXXCallType type,
                                        const FunctionType::ExtInfo &info,
                                        ArrayRef<ExtParameterInfo> paramInfos,
                                        CanQualType resultType,
@@ -818,6 +841,9 @@ CGFunctionInfo *CGFunctionInfo::create(unsigned llvmCC,
   FI->ChainCall = chainCall;
   FI->CmseNSCall = info.getCmseNSCall();
   FI->NoReturn = info.getNoReturn();
+  FI->CxxCtor = (type == CXXCallType::Ctor);
+  FI->CxxCMCtor = (type == CXXCallType::CM_Ctor);
+  FI->CxxDtor = (type == CXXCallType::Dtor);
   FI->ReturnsRetained = info.getProducesResult();
   FI->NoCallerSavedRegs = info.getNoCallerSavedRegs();
   FI->NoCfCheck = info.getNoCfCheck();
@@ -4007,6 +4033,19 @@ CodeGenFunction::AddObjCARCExceptionMetadata(llvm::Instruction *Inst) {
                       CGM.getNoObjCARCExceptionsMetadata());
 }
 
+void CodeGenFunction::AddCxxFuncCallMetadata(llvm::Instruction *Inst,
+                                             unsigned KindID) {
+  auto& Context = getLLVMContext();
+  llvm::MDBuilder MDB(Context);
+
+  auto *FirstGeneration = MDB.createConstant(
+      llvm::ConstantInt::get(llvm::Type::getInt64Ty(Context), 1));
+
+  llvm::MDNode* Node = llvm::MDNode::get(getLLVMContext(), FirstGeneration);
+
+  Inst->setMetadata(KindID, Node);
+}
+
 /// Emits a call to the given no-arguments nounwind runtime function.
 llvm::CallInst *
 CodeGenFunction::EmitNounwindRuntimeCall(llvm::FunctionCallee callee,
@@ -4872,6 +4911,15 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
   AllocAlignAttrEmitter AllocAlignAttrEmitter(*this, TargetDecl, CallArgs);
   Attrs = AllocAlignAttrEmitter.TryEmitAsCallSiteAttribute(Attrs);
 
+  // TODO add comment
+  if (CallInfo.isCxxCMCtor()) {
+    assert(IRCallArgs.size() == 2);
+    EmitCopyStartOrEnd(IRCallArgs[0], IRCallArgs[1], /*EmitStart*/ true);
+  } else if (CallInfo.isCxxDtor()) {
+    assert(IRCallArgs.size() == 1);
+    EmitCleanupStartOrEnd(IRCallArgs[0], /*EmitStart*/ true);
+  }
+
   // Emit the actual call/invoke instruction.
   llvm::CallBase *CI;
   if (!InvokeDest) {
@@ -4884,6 +4932,20 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
   }
   if (callOrInvoke)
     *callOrInvoke = CI;
+
+  // TODO add comment
+  if (CallInfo.isCxxCtor()) {
+    AddCxxFuncCallMetadata(CI, llvm::LLVMContext::MD_init);
+  } else if (CallInfo.isCxxCMCtor()) {
+    AddCxxFuncCallMetadata(CI, llvm::LLVMContext::MD_copy_init);
+    assert(CI->getNumArgOperands() == 2);
+    EmitCopyStartOrEnd(CI->getOperand(0), CI->getOperand(1),
+                       /*EmitStart*/ false);
+  } else if (CallInfo.isCxxDtor()) {
+    AddCxxFuncCallMetadata(CI, llvm::LLVMContext::MD_cleanup);
+    assert(CI->getNumArgOperands() == 1);
+    EmitCleanupStartOrEnd(CI->getOperand(0), /*EmitStart*/ false);
+  }
 
   // If this is within a function that has the guard(nocf) attribute and is an
   // indirect call, add the "guard_nocf" attribute to this call to indicate that

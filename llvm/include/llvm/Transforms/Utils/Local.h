@@ -286,8 +286,8 @@ inline Align getKnownAlignment(Value *V, const DataLayout &DL,
 /// uses replaced by the new call.
 CallInst *createCallMatchingInvoke(InvokeInst *II);
 
-/// This function converts the specified invoek into a normall call.
-void changeToCall(InvokeInst *II, DomTreeUpdater *DTU = nullptr);
+/// This function converts the specified invoke into a normal call.
+CallInst *changeToCall(InvokeInst *II, DomTreeUpdater *DTU = nullptr);
 
 ///===---------------------------------------------------------------------===//
 ///  Dbg Intrinsic utilities

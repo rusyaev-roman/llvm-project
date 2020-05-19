@@ -14,6 +14,8 @@
 #ifndef LLVM_TRANSFORMS_UTILS_CODEMOVERUTILS_H
 #define LLVM_TRANSFORMS_UTILS_CODEMOVERUTILS_H
 
+#include "llvm/ADT/SmallSet.h"
+
 namespace llvm {
 
 class BasicBlock;
@@ -35,6 +37,12 @@ bool isControlFlowEquivalent(const Instruction &I0, const Instruction &I1,
 bool isControlFlowEquivalent(const BasicBlock &BB0, const BasicBlock &BB1,
                              const DominatorTree &DT,
                              const PostDominatorTree &PDT);
+
+/// Collect all instructions in between \p StartInst and \p EndInst, and store
+/// them in \p InBetweenInsts.
+void collectInstructionsInBetween(
+    Instruction &StartInst, const Instruction &EndInst,
+    SmallPtrSetImpl<Instruction *> &InBetweenInsts);
 
 /// Return true if \p I can be safely moved before \p InsertPoint.
 bool isSafeToMoveBefore(Instruction &I, Instruction &InsertPoint,

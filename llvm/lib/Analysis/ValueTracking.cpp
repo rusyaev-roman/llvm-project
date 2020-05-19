@@ -606,6 +606,10 @@ bool llvm::isAssumeLikeIntrinsic(const Instruction *I) {
       case Intrinsic::dbg_label:
       case Intrinsic::invariant_start:
       case Intrinsic::invariant_end:
+      case Intrinsic::cleanup_start:
+      case Intrinsic::cleanup_end:
+      case Intrinsic::copy_start:
+      case Intrinsic::copy_end:
       case Intrinsic::lifetime_start:
       case Intrinsic::lifetime_end:
       case Intrinsic::objectsize:

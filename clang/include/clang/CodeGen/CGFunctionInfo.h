@@ -475,6 +475,15 @@ public:
   }
 };
 
+// for call instruction of function, that have one of these
+// types, will be generated special metadata
+enum class CXXCallType {
+  None,
+  Ctor,    // non copy/move constructor
+  CM_Ctor, // copy/move constructor
+  Dtor     // destructor
+};
+
 // Implementation detail of CGFunctionInfo, factored out so it can be named
 // in the TrailingObjects base class of CGFunctionInfo.
 struct CGFunctionInfoArgInfo {
@@ -510,6 +519,11 @@ class CGFunctionInfo final
 
   /// Whether this function is a CMSE nonsecure call
   unsigned CmseNSCall : 1;
+
+  /// Function is c++ constructor or destructor.
+  unsigned CxxCtor : 1;
+  unsigned CxxCMCtor : 1;
+  unsigned CxxDtor : 1;
 
   /// Whether this function is noreturn.
   unsigned NoReturn : 1;
@@ -557,6 +571,7 @@ public:
   static CGFunctionInfo *create(unsigned llvmCC,
                                 bool instanceMethod,
                                 bool chainCall,
+                                CXXCallType type,
                                 const FunctionType::ExtInfo &extInfo,
                                 ArrayRef<ExtParameterInfo> paramInfos,
                                 CanQualType resultType,
@@ -602,6 +617,10 @@ public:
   bool isChainCall() const { return ChainCall; }
 
   bool isCmseNSCall() const { return CmseNSCall; }
+
+  bool isCxxCtor() const { return CxxCtor; }
+  bool isCxxCMCtor() const { return CxxCMCtor; }
+  bool isCxxDtor() const { return CxxDtor; }
 
   bool isNoReturn() const { return NoReturn; }
 
@@ -676,6 +695,9 @@ public:
     ID.AddInteger(getASTCallingConvention());
     ID.AddBoolean(InstanceMethod);
     ID.AddBoolean(ChainCall);
+    ID.AddBoolean(CxxCtor);
+    ID.AddBoolean(CxxCMCtor);
+    ID.AddBoolean(CxxDtor);
     ID.AddBoolean(NoReturn);
     ID.AddBoolean(ReturnsRetained);
     ID.AddBoolean(NoCallerSavedRegs);
@@ -696,6 +718,7 @@ public:
   static void Profile(llvm::FoldingSetNodeID &ID,
                       bool InstanceMethod,
                       bool ChainCall,
+                      CXXCallType type,
                       const FunctionType::ExtInfo &info,
                       ArrayRef<ExtParameterInfo> paramInfos,
                       RequiredArgs required,
@@ -704,6 +727,9 @@ public:
     ID.AddInteger(info.getCC());
     ID.AddBoolean(InstanceMethod);
     ID.AddBoolean(ChainCall);
+    ID.AddBoolean(type == CXXCallType::Ctor);
+    ID.AddBoolean(type == CXXCallType::CM_Ctor);
+    ID.AddBoolean(type == CXXCallType::Dtor);
     ID.AddBoolean(info.getNoReturn());
     ID.AddBoolean(info.getProducesResult());
     ID.AddBoolean(info.getNoCallerSavedRegs());

@@ -89,6 +89,14 @@ FunctionPass *createAggressiveDCEPass();
 
 //===----------------------------------------------------------------------===//
 //
+// CopyElision - Remove C++ copy/move ctors and corresponding dtors,
+// replacing src object with dst one wherever possible. For more information
+// see: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p0889r1.html
+//
+FunctionPass *createCopyElisionPass();
+
+//===----------------------------------------------------------------------===//
+//
 // GuardWidening - An optimization over the @llvm.experimental.guard intrinsic
 // that (optimistically) combines multiple guards into one to have fewer checks
 // at runtime.

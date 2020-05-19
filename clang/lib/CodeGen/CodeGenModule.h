@@ -538,6 +538,18 @@ private:
   /// void @llvm.lifetime.end(i64 %size, i8* nocapture <ptr>)
   llvm::Function *LifetimeEndFn = nullptr;
 
+  /// void @llvm.cleanup.start(i8* nocapture <ptr>)
+  //llvm::Function *CleanupStartFn = nullptr;
+
+  /// void @llvm.cleanup.end(i8* nocapture <ptr>)
+  //llvm::Function *CleanupEndFn = nullptr;
+
+  /// void @llvm.copy.start(i8* nocapture <ptr>)
+  //llvm::Function *CopyStartFn = nullptr;
+
+  /// void @llvm.copy.end(i8* nocapture <ptr>)
+  //llvm::Function *CopyEndFn = nullptr;
+
   std::unique_ptr<SanitizerMetadata> SanitizerMD;
 
   llvm::MapVector<const Decl *, bool> DeferredEmptyCoverageMappingDecls;
@@ -1082,6 +1094,11 @@ public:
 
   llvm::Function *getLLVMLifetimeStartFn();
   llvm::Function *getLLVMLifetimeEndFn();
+
+  //llvm::Function *getLLVMCleanupStartFn();
+  //llvm::Function *getLLVMCleanupEndFn();
+  //llvm::Function *getLLVMCopyStartFn();
+  //llvm::Function *getLLVMCopyEndFn();
 
   // Make sure that this type is translated.
   void UpdateCompletedType(const TagDecl *TD);

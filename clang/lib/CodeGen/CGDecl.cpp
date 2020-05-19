@@ -1317,6 +1317,53 @@ void CodeGenFunction::EmitLifetimeEnd(llvm::Value *Size, llvm::Value *Addr) {
   C->setDoesNotThrow();
 }
 
+// TODO: move to CGDeclCXX
+void CodeGenFunction::EmitCleanupStartOrEnd(llvm::Value *Addr, bool EmitStart) {
+  if (Addr->getType()->getPointerAddressSpace() !=
+      CGM.getDataLayout().getAllocaAddrSpace())
+    return;
+
+  llvm::Intrinsic::ID StartEndID =
+      EmitStart ? llvm::Intrinsic::cleanup_start : llvm::Intrinsic::cleanup_end;
+  llvm::Function *CleanupStartEnd =
+      CGM.getIntrinsic(StartEndID, {Addr->getType()});
+
+  llvm::CallInst *C = Builder.CreateCall(CleanupStartEnd, {Addr});
+  C->setDoesNotThrow();
+
+  //Addr = Builder.CreateBitCast(Addr, AllocaInt8PtrTy);
+  //llvm::CallInst *C = Builder.CreateCall(EmitStart ? CGM.getLLVMCleanupStartFn()
+  //                                                 : CGM.getLLVMCleanupEndFn(),
+  //                                       {Addr});
+  //C->setDoesNotThrow();
+}
+
+// TODO: move to CGDeclCXX
+void CodeGenFunction::EmitCopyStartOrEnd(llvm::Value *AddrDst,
+                                         llvm::Value *AddrSrc, bool EmitStart) {
+  if (AddrDst->getType()->getPointerAddressSpace() !=
+      CGM.getDataLayout().getAllocaAddrSpace())
+    return;
+
+  assert(AddrDst->getType()->getPointerAddressSpace() ==
+         AddrSrc->getType()->getPointerAddressSpace());
+
+  llvm::Intrinsic::ID StartEndID =
+      EmitStart ? llvm::Intrinsic::copy_start : llvm::Intrinsic::copy_end;
+  llvm::Function *CopyStartEnd =
+      CGM.getIntrinsic(StartEndID, {AddrDst->getType(), AddrSrc->getType()});
+
+  llvm::CallInst *C = Builder.CreateCall(CopyStartEnd, {AddrDst, AddrSrc});
+  C->setDoesNotThrow();
+
+  //AddrDst = Builder.CreateBitCast(AddrDst, AllocaInt8PtrTy);
+  //AddrSrc = Builder.CreateBitCast(AddrSrc, AllocaInt8PtrTy);
+  //llvm::CallInst *C = Builder.CreateCall(EmitStart ? CGM.getLLVMCopyStartFn()
+  //                                                 : CGM.getLLVMCopyEndFn(),
+  //                                       {AddrDst, AddrSrc});
+  //C->setDoesNotThrow();
+}
+
 void CodeGenFunction::EmitAndRegisterVariableArrayDimensions(
     CGDebugInfo *DI, const VarDecl &D, bool EmitDebugInfo) {
   // For each dimension stores its QualType and corresponding
@@ -2329,6 +2376,44 @@ llvm::Function *CodeGenModule::getLLVMLifetimeEndFn() {
     llvm::Intrinsic::lifetime_end, AllocaInt8PtrTy);
   return LifetimeEndFn;
 }
+
+/// Lazily declare the @llvm.cleanup.start intrinsic.
+//llvm::Function *CodeGenModule::getLLVMCleanupStartFn() {
+//  if (CleanupStartFn)
+//    return CleanupStartFn;
+//  CleanupStartFn = llvm::Intrinsic::getDeclaration(
+//      &getModule(), llvm::Intrinsic::cleanup_start, AllocaInt8PtrTy);
+//  return CleanupStartFn;
+//}
+//
+///// Lazily declare the @llvm.cleanup.end intrinsic.
+//llvm::Function *CodeGenModule::getLLVMCleanupEndFn() {
+//  if (CleanupEndFn)
+//    return CleanupEndFn;
+//  CleanupEndFn = llvm::Intrinsic::getDeclaration(
+//      &getModule(), llvm::Intrinsic::cleanup_end, AllocaInt8PtrTy);
+//  return CleanupEndFn;
+//}
+
+/// Lazily declare the @llvm.copy.start intrinsic.
+//llvm::Function *CodeGenModule::getLLVMCopyStartFn() {
+//  if (CopyStartFn)
+//    return CopyStartFn;
+//  CopyStartFn =
+//      llvm::Intrinsic::getDeclaration(&getModule(), llvm::Intrinsic::copy_start,
+//                                      {AllocaVoidPtrTy, AllocaVoidPtrTy});
+//  return CopyStartFn;
+//}
+//
+///// Lazily declare the @llvm.copy.end intrinsic.
+//llvm::Function *CodeGenModule::getLLVMCopyEndFn() {
+//  if (CopyEndFn)
+//    return CopyEndFn;
+//  CopyEndFn =
+//      llvm::Intrinsic::getDeclaration(&getModule(), llvm::Intrinsic::copy_end,
+//                                      {AllocaVoidPtrTy, AllocaVoidPtrTy});
+//  return CopyEndFn;
+//}
 
 namespace {
   /// A cleanup to perform a release of an object at the end of a

@@ -288,6 +288,10 @@ protected:
 
     case Intrinsic::lifetime_start:
     case Intrinsic::lifetime_end:
+    case Intrinsic::cleanup_start:
+    case Intrinsic::cleanup_end:
+    case Intrinsic::copy_start:
+    case Intrinsic::copy_end:
       return; // No-op intrinsics.
     }
   }

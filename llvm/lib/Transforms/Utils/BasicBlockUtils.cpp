@@ -733,6 +733,11 @@ BasicBlock *llvm::SplitBlockPredecessors(BasicBlock *BB,
 
   // The new block unconditionally branches to the old block.
   BranchInst *BI = BranchInst::Create(BB, NewBB);
+
+  BI->copyMetadata(BB->front(),
+                   {LLVMContext::MD_init, LLVMContext::MD_copy_init,
+                    LLVMContext::MD_cleanup});
+
   // Splitting the predecessors of a loop header creates a preheader block.
   if (LI && LI->isLoopHeader(BB))
     // Using the loop start line number prevents debuggers stepping into the
